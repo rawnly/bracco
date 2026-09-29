@@ -1,45 +1,50 @@
-# fff-picker
+<p align="center">
+  <img src="assets/bracco-logo.png" alt="bracco" width="220">
+</p>
 
-Fuzzy file picker for the terminal: git-modified files first, respects
-`.gitignore`. Built on [fff-search](https://crates.io/crates/fff-search) and
-[ratatui](https://ratatui.rs).
+<h1 align="center">bracco</h1>
 
-The interactive UI is drawn on `/dev/tty`; the selected path goes to stdout, so
-it composes with shells and editors:
+<p align="center">
+  A fast fuzzy file picker for the terminal: git-modified files first, <code>.gitignore</code> respected.<br>
+  <em>bracco</em> (BRAHK-koh) is the Italian pointer dog: it sniffs out what you changed and points at it.
+</p>
 
-```sh
-$EDITOR "$(fff-picker)"
-```
+<p align="center">
+  <a href="https://github.com/rawnly/bracco/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/rawnly/bracco/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/rawnly/bracco/releases"><img alt="Release" src="https://img.shields.io/github/v/release/rawnly/bracco"></a>
+</p>
 
-Exit codes: `0` selected, `1` cancelled / no match, `2` error.
+> Formerly `fff-picker`. The old `FFF_PICKER_*` environment variables are still honored.
+
+## Features
+
+- **Git-aware ranking**: modified, staged and untracked files float to the top; filter by status with `tab`.
+- **Fast**: built on [fff-search](https://crates.io/crates/fff-search), respects `.gitignore`.
+- **Preview pane**: show any command's output (`bat`, `git diff`, ...) next to the list.
+- **Vim mode**: `--vim` for modal `j`/`k`/`/` navigation.
+- **Composable**: UI on `/dev/tty`, result on stdout. Works with `$EDITOR "$(bracco)"`, pipes and `--list`.
+- **[Herdr](https://herdr.dev) plugin** included.
 
 ## Install
 
 With [mise](https://mise.jdx.dev):
 
 ```sh
-mise use -g github:rawnly/fff-picker
+mise use -g github:rawnly/bracco
+```
+
+From [source](https://www.rust-lang.org/tools/install):
+
+```sh
+cargo install --git https://github.com/rawnly/bracco --locked
 ```
 
 Or download an archive for your platform from
-[Releases](https://github.com/rawnly/fff-picker/releases). Each archive contains:
+[Releases](https://github.com/rawnly/bracco/releases). It contains the binary,
+man page, usage spec and shell completions.
 
-```
-bin/fff-picker
-share/man/man1/fff-picker.1
-share/usage/fff-picker.kdl
-share/bash-completion/completions/fff-picker
-share/zsh/site-functions/_fff-picker
-share/fish/vendor_completions.d/fff-picker.fish
-```
-
-Or build from source:
-
-```sh
-cargo install --git https://github.com/rawnly/fff-picker --locked
-```
-
-### Verify a download
+<details>
+<summary>Verify a download</summary>
 
 Every release ships a signed [packslip](https://packslip.dev) bundle
 (`packslip.sigstore.json`) covering all archives, signed keylessly by the
@@ -47,115 +52,122 @@ release workflow:
 
 ```sh
 packslip verify packslip.sigstore.json \
-  --identity-prefix https://github.com/rawnly/fff-picker/.github/workflows/release.yml@ \
+  --identity-prefix https://github.com/rawnly/bracco/.github/workflows/release.yml@ \
   --issuer https://token.actions.githubusercontent.com \
-  --artifact fff-picker-aarch64-apple-darwin.tar.xz
+  --artifact bracco-aarch64-apple-darwin.tar.xz
 ```
 
 Build provenance is also attested:
-`gh attestation verify fff-picker-aarch64-apple-darwin.tar.xz --repo rawnly/fff-picker`.
+`gh attestation verify bracco-aarch64-apple-darwin.tar.xz --repo rawnly/bracco`.
+
+</details>
+
+## Quick start
+
+```sh
+bracco                              # pick a file, print its path
+$EDITOR "$(bracco)"                 # open it in your editor
+bracco --edit --keep-open           # open in $VISUAL/$EDITOR and come back
+bracco -c --preview 'git diff --color=always {}'   # changed files with a diff preview
+bracco --vim                        # modal keys
+bracco -l -q '*.rs' -n 20           # non-interactive: list matches
+```
+
+Press `?` (or `F1`) inside the picker for the full key reference.
 
 ## Usage
 
 ```
-fff-picker [FLAGS] [DIR]
+bracco [FLAGS] [DIR]
 
-  -q, --query <QUERY>      Initial query (interactive) or the query to run (--list)
-  -l, --list               Non-interactive: print matches to stdout and exit
-  -n, --limit <LIMIT>      Max results for --list (default: 100)
-  -a, --absolute           Print absolute paths
-  -0, --print0             Separate output paths with NUL instead of newline
-      --status <STATUS>    all, changed, staged, unstaged, untracked, clean
-  -c, --changed            Shortcut for --status changed
-  -e, --ext <EXT>          Only files with this extension (repeatable / comma-separated)
-  -x, --exclude <GLOB>     Exclude paths matching this glob (repeatable)
-      --vim                Vim-style modal keys (j/k, J/K, g/G, / to search) [env: FFF_PICKER_VIM]
-      --log-file <FILE>    Write logs to FILE (level via RUST_LOG) [env: FFF_PICKER_LOG_FILE]
+  -q, --query <QUERY>          Initial query (interactive) or the query to run (--list)
+  -l, --list                   Non-interactive: print matches to stdout and exit
+  -n, --limit <LIMIT>          Max results for --list (default: 100)
+  -a, --absolute               Print absolute paths
+  -0, --print0                 Separate output paths with NUL instead of newline
+      --status <STATUS>        all, changed, staged, unstaged, untracked, clean
+  -c, --changed                Shortcut for --status changed
+  -e, --ext <EXT>              Only files with this extension (repeatable / comma-separated)
+  -x, --exclude <GLOB>         Exclude paths matching this glob (repeatable)
+  -E, --exec <CMD>             Run CMD on enter instead of printing the path ({} = path)
+      --edit                   Shortcut for --exec '$VISUAL / $EDITOR / vi'
+      --keep-open              With --exec / --edit: return to the picker afterwards
+      --preview <CMD>          Show CMD's output for the highlighted file
+      --preview-window <SPEC>  [right|left|up|down][:N%][:hidden] (default: right:50%)
+      --vim                    Vim-style modal keys
+      --log-file <FILE>        Write logs to FILE (level via RUST_LOG)
 ```
 
-Run `fff-picker --help` or `man fff-picker` for the full reference.
+Run `bracco --help` or `man bracco` for the full reference.
 
-Shell completions can also be printed directly:
+**Exit codes:** `0` selected, `1` cancelled / no match, `2` error. With `--exec`,
+the command's own exit code.
+
+### Keys
+
+| Key | Action |
+| --- | --- |
+| `↑` `↓` `^p` `^n` | Move selection |
+| `enter` | Select (print path or run `--exec`) |
+| `tab` / `shift-tab` | Cycle git status filter |
+| `^g` `^s` `^a` `^t` | Toggle changed / staged / unstaged / untracked |
+| `^o` | Show / hide preview |
+| `^d` `^u` | Scroll preview half a page |
+| `^w` `^x` | Delete last word / clear query |
+| `esc` `^c` | Cancel |
+
+**Vim mode (`--vim`)** starts in normal mode:
+
+| Key | Action |
+| --- | --- |
+| `j` `k` | Move selection |
+| `g` `G` | Top / bottom |
+| `d` `u` | Jump 10 rows |
+| `J` `K` | Scroll preview by line (`f` `b` by page) |
+| `/` `i` `a` | Start searching (insert mode) |
+| `esc` | Insert → normal; normal → cancel |
+| `q` | Cancel |
+
+### Query syntax
+
+| Query | Matches |
+| --- | --- |
+| `text` | Fuzzy match on the path |
+| `*.rs` | Only this extension |
+| `/src/` | Only inside this directory |
+| `!test` | Exclude matches |
+| `type:rust` | By file type |
+| `status:modified` | Git status (`staged`, `untracked`, ...) |
+
+### Environment
+
+| Variable | Equivalent flag |
+| --- | --- |
+| `BRACCO_EXEC` | `--exec` |
+| `BRACCO_PREVIEW` | `--preview` |
+| `BRACCO_VIM` | `--vim` |
+| `BRACCO_LOG_FILE` | `--log-file` |
+
+### Shell completions
 
 ```sh
-fff-picker completions zsh > ~/.zfunc/_fff-picker   # bash, zsh, fish, elvish, nu, powershell
+bracco completions zsh > ~/.zfunc/_bracco   # bash, zsh, fish, elvish, nu, powershell
 ```
 
 ## Herdr plugin
 
-`herdr-plugin.toml` adds a `pick` action that opens a popup with the picker and
-then opens the chosen file in your editor (`$FFF_PICKER_EDITOR`, `$VISUAL`,
+`herdr-plugin.toml` adds a `pick` action that opens a popup with bracco and
+then opens the chosen file in your editor (`$BRACCO_EDITOR`, `$VISUAL`,
 `$EDITOR`, else `vi`) in an overlay pane.
 
 ```sh
-herdr plugin link .                # or: herdr plugin install rawnly/fff-picker
-herdr plugin action invoke pick --plugin dev.rawnly.fff-picker
+herdr plugin link .                # or: herdr plugin install rawnly/bracco
+herdr plugin action invoke pick --plugin dev.rawnly.bracco
 ```
 
-Requires `fff-picker` (and optionally `jq`) in `PATH`; bind the action to a key
-in your herdr config.
+Requires `bracco` (and optionally `jq`) in `PATH`; bind the action to a key in
+your herdr config.
 
-## Development
+## Contributing
 
-```sh
-cargo fmt --all                               # CI checks formatting
-mbx clippy --all-targets -- -D warnings       # or plain `cargo`
-mbx test
-scripts/generate.sh                           # completions + man page into dist/ (man page needs `usage`)
-```
-
-CI (`.github/workflows/ci.yml`) runs fmt, clippy and tests on Linux and macOS
-for every push to `main` and every pull request, with
-[mr boxington](https://mr-boxington.jdx.dev) caching.
-
-## Releasing
-
-Releases are fully automated by `.github/workflows/release.yml` and triggered
-by pushing a `v*` tag.
-
-1. **Bump the version** in `Cargo.toml` and refresh the lockfile:
-
-   ```sh
-   # edit Cargo.toml: version = "0.2.0"
-   cargo check            # updates Cargo.lock
-   ```
-
-2. **Commit and push to `main`**, and wait for CI to go green:
-
-   ```sh
-   git commit -am "release: v0.2.0"
-   git push origin main
-   ```
-
-3. **Tag and push the tag.** The tag must be `v` + the exact `Cargo.toml`
-   version, otherwise the build fails early:
-
-   ```sh
-   git tag v0.2.0
-   git push origin v0.2.0
-   ```
-
-4. **Watch the workflow** (`gh run watch`). It runs four jobs:
-
-   | Job                | What it does                                                                                                       | Permissions                                   |
-   | ------------------ | ------------------------------------------------------------------------------------------------------------------ | --------------------------------------------- |
-   | `build`            | Builds `x86_64`/`aarch64` for Linux (gnu) and macOS, generates completions + man page, packages `fff-picker-<target>.tar.xz` | `contents: read`                              |
-   | `release`          | Creates the GitHub release (auto-generated notes) and uploads the archives                                         | `contents: write`                             |
-   | `packslip`         | Downloads the archives from the release, attests them, signs the packslip manifest with the workflow's OIDC identity | `contents: read`, `id-token`, `attestations` |
-   | `publish-packslip` | Uploads only `packslip.sigstore.json` to the release                                                               | `contents: write`                             |
-
-   Signing runs in a job that cannot modify the release; a separate minimal job
-   uploads the bundle. Release builds use mbx with a local-only cache, so no
-   cached objects from CI can end up in published binaries.
-
-5. **Check the published release**: download the bundle and an archive from
-   the release page and run the [verify](#verify-a-download) command above.
-
-### If something fails
-
-- **Tag/version mismatch** — delete the tag (`git push --delete origin v0.2.0 && git tag -d v0.2.0`), fix `Cargo.toml`, and re-tag.
-- **Failure after the release was created** — re-run the failed jobs from the
-  Actions UI (`gh run rerun <id> --failed`). `packslip` re-downloads assets
-  from the release and the bundle upload uses `--clobber`, so re-runs are safe.
-- **Starting over** — delete the release and the tag, then push the tag again:
-  `gh release delete v0.2.0 --cleanup-tag --yes`.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and the release process.
