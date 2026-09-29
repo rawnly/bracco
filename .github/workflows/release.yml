@@ -1,0 +1,171 @@
+name: release
+
+# Push a tag like `v0.1.0` (matching Cargo.toml's version) to cut a release:
+#   build (matrix) -> release (create GH release + upload archives)
+#   -> packslip (sign, read-only) -> publish-packslip (upload bundle)
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  BIN: fff-picker
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-gnu, os: ubuntu-latest }
+          - { target: aarch64-unknown-linux-gnu, os: ubuntu-24.04-arm }
+          - { target: x86_64-apple-darwin, os: macos-15-intel }
+          - { target: aarch64-apple-darwin, os: macos-latest }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check tag matches Cargo.toml version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match Cargo.toml version $version"
+            exit 1
+          fi
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # Production release: keep mbx local-only. No remote cache and no
+      # GitHub cache restore/save, so cached objects cannot influence the
+      # published binaries.
+      - uses: jdx/mr-boxington-action@v1
+        with:
+          backend: local
+
+      # `usage` renders the man page in scripts/generate.sh.
+      - uses: jdx/mise-action@v4
+        with:
+          cache: false
+          mise_toml: |
+            [tools]
+            usage = "latest"
+
+      - name: Build
+        run: mbx build --release --locked --target ${{ matrix.target }}
+
+      - name: Generate completions and man page
+        run: scripts/generate.sh "target/${{ matrix.target }}/release/$BIN"
+
+      # Archive has no top-level directory, so packslip `archive:` paths are
+      # identical across all platforms.
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          stage="$RUNNER_TEMP/stage"
+          mkdir -p "$stage/bin" \
+            "$stage/share/man/man1" \
+            "$stage/share/usage" \
+            "$stage/share/bash-completion/completions" \
+            "$stage/share/zsh/site-functions" \
+            "$stage/share/fish/vendor_completions.d"
+          install -m 755 "target/${{ matrix.target }}/release/$BIN" "$stage/bin/$BIN"
+          cp "dist/man/$BIN.1"            "$stage/share/man/man1/$BIN.1"
+          cp "dist/$BIN.usage.kdl"        "$stage/share/usage/$BIN.kdl"
+          cp "dist/completions/$BIN.bash" "$stage/share/bash-completion/completions/$BIN"
+          cp "dist/completions/_$BIN"     "$stage/share/zsh/site-functions/_$BIN"
+          cp "dist/completions/$BIN.fish" "$stage/share/fish/vendor_completions.d/$BIN.fish"
+          mkdir -p out
+          tar -C "$stage" -cJf "out/$BIN-${{ matrix.target }}.tar.xz" bin share
+          tar -tJf "out/$BIN-${{ matrix.target }}.tar.xz"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: archive-${{ matrix.target }}
+          path: out/*.tar.xz
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: archive-*
+          path: out
+          merge-multiple: true
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ls -l out
+          gh release create "$GITHUB_REF_NAME" out/*.tar.xz \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            --verify-tag
+
+  # Signs with the workflow's OIDC identity. Read-only on contents: it can
+  # download release assets but cannot modify the release.
+  packslip:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: jdx/packslip@v1
+        id: packslip
+        with:
+          download: fff-picker-*.tar.xz
+          bin: fff-picker=bin/fff-picker
+          resources: |
+            man=archive:share/man/man1/fff-picker.1
+            cli-spec/usage/fff-picker=archive:share/usage/fff-picker.kdl
+            completion/bash/fff-picker=archive:share/bash-completion/completions/fff-picker
+            completion/zsh/fff-picker=archive:share/zsh/site-functions/_fff-picker
+            completion/fish/fff-picker=archive:share/fish/vendor_completions.d/fff-picker.fish
+          upload: false
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: packslip-bundle
+          path: ${{ steps.packslip.outputs.bundle }}
+          if-no-files-found: error
+
+  # The only job with release write access that touches the bundle; it
+  # uploads exactly the signed JSON file and nothing else.
+  publish-packslip:
+    needs: packslip
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: packslip-bundle
+          path: packslip
+      - name: Upload the signed bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test -f packslip/packslip.sigstore.json
+          gh release upload "$GITHUB_REF_NAME" packslip/packslip.sigstore.json \
+            --repo "$GITHUB_REPOSITORY" --clobber
