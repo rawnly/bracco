@@ -4,12 +4,18 @@ Thanks for helping out! Issues and pull requests are welcome.
 
 ## Development
 
+With [mise](https://mise.jdx.dev) (`mise install` sets up the toolchain):
+
 ```sh
-cargo fmt --all                               # CI checks formatting
-mbx clippy --all-targets -- -D warnings       # or plain `cargo`
-mbx test
-scripts/generate.sh                           # completions + man page into dist/ (man page needs `usage`)
+mise run fmt      # format
+mise run lint     # fmt check + clippy (warnings denied), as CI does
+mise run test     # cargo test
+mise run check    # lint + test: everything CI runs
+mise run build    # release build
+scripts/generate.sh   # completions + man page into dist/ (man page needs `usage`)
 ```
+
+Plain `cargo` works too; `mbx` is a cached drop-in for it.
 
 CI (`.github/workflows/ci.yml`) runs fmt, clippy and tests on Linux and macOS
 for every push to `main` and every pull request, with

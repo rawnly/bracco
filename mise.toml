@@ -2,3 +2,43 @@
 lefthook = "2.1.4"
 mr-boxington = "1.19.0"
 rust = "1.94.0"
+gh = "latest"
+
+[tasks."update-deploy-key"]
+run = """
+ssh-keygen -t ed25519 -N "" -C "bracco release" -f /tmp/bracco-tap-key
+gh repo deploy-key add /tmp/bracco-tap-key.pub --repo rawnly/homebrew-tap --allow-write --title "bracco release"
+gh secret set HOMEBREW_TAP_DEPLOY_KEY --repo rawnly/bracco < /tmp/bracco-tap-key
+shred -u /tmp/bracco-tap-key 2>/dev/null || rm -P /tmp/bracco-tap-key
+"""
+
+[tasks.build]
+description = "Build the release binary"
+run = "cargo build --release"
+
+[tasks.fmt]
+description = "Format the code"
+run = "cargo fmt --all"
+
+[tasks."lint:fmt"]
+description = "Check formatting (as CI does)"
+run = "cargo fmt --all --check"
+
+[tasks."lint:clippy"]
+description = "Run clippy with warnings denied (as CI does)"
+run = "cargo clippy --all-targets --locked -- -D warnings"
+
+[tasks.lint]
+description = "Formatting + clippy"
+depends = ["lint:fmt", "lint:clippy"]
+
+[tasks.test]
+description = "Run the test suite"
+run = "cargo test --locked"
+
+[tasks.check]
+description = "Everything CI runs: lint + test"
+depends = ["lint", "test"]
+
+[tasks.install]
+run = "cargo install --path ."
