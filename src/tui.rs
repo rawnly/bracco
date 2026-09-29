@@ -1,0 +1,407 @@
+use std::io::Write;
+
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::terminal::{
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+};
+use crossterm::execute;
+use eyre::Result;
+use ratatui::Terminal;
+use ratatui::backend::CrosstermBackend;
+use ratatui::layout::{Alignment, Constraint, Layout};
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{List, ListItem, ListState, Paragraph};
+
+use crate::icons::icon_for;
+use crate::filters::{Filters, StatusFilter};
+use crate::finder::{Entry, Finder, GitState};
+
+const LIMIT: usize = 2000;
+
+/// Restores the terminal on drop (normal exit, error, or panic unwind).
+struct TermGuard(std::fs::File);
+
+impl Drop for TermGuard {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+        let _ = execute!(self.0, LeaveAlternateScreen);
+        let _ = self.0.flush();
+    }
+}
+
+/// Run the interactive picker on the given tty so stdout stays clean for the
+/// selected path. Returns `None` if cancelled.
+pub fn run(
+    tty: std::fs::File,
+    finder: &Finder,
+    initial_query: &str,
+    filters: Filters,
+) -> Result<Option<String>> {
+    enable_raw_mode()?;
+    let mut out = tty.try_clone()?;
+    let _guard = TermGuard(tty.try_clone()?);
+    execute!(out, EnterAlternateScreen)?;
+
+    // Make panics readable: restore first, then run the previous hook.
+    let prev = std::panic::take_hook();
+    let panic_tty = tty.try_clone()?;
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = disable_raw_mode();
+        let _ = execute!(&panic_tty, LeaveAlternateScreen);
+        prev(info);
+    }));
+
+    let mut terminal = Terminal::new(CrosstermBackend::new(tty))?;
+    event_loop(&mut terminal, finder, initial_query, filters)
+}
+
+fn event_loop(
+    terminal: &mut Terminal<CrosstermBackend<std::fs::File>>,
+    finder: &Finder,
+    initial_query: &str,
+    mut filters: Filters,
+) -> Result<Option<String>> {
+    let mut show_help = false;
+    let mut help_scroll: u16 = 0;
+    let mut query = initial_query.to_string();
+    let mut res = finder.search(&query, &filters, LIMIT);
+    let mut entries: Vec<Entry> = std::mem::take(&mut res.entries);
+    let mut total = res.total;
+    let mut state = ListState::default().with_selected(Some(0));
+
+    loop {
+        terminal.draw(|f| {
+            let [input, list, status] = Layout::vertical([
+                Constraint::Length(1),
+                Constraint::Min(1),
+                Constraint::Length(1),
+            ])
+            .areas(f.area());
+
+            // Input row: prompt + query on the left, active filters right-aligned.
+            const MIN_INPUT: u16 = 12;
+            let chips = filter_chips(&filters, input.width.saturating_sub(MIN_INPUT));
+            let chips_w = chips.width() as u16;
+            let [text_area, chips_area] =
+                Layout::horizontal([Constraint::Min(1), Constraint::Length(chips_w)]).areas(input);
+
+            let prompt = Span::styled("❯ ", Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD));
+            let text = if query.is_empty() {
+                Line::from(vec![
+                    prompt,
+                    Span::styled("type to search…", Style::new().fg(Color::DarkGray)),
+                ])
+            } else {
+                Line::from(vec![prompt, Span::raw(query.as_str())])
+            };
+            f.render_widget(Paragraph::new(text), text_area);
+            f.render_widget(Paragraph::new(chips).alignment(Alignment::Right), chips_area);
+
+            f.set_cursor_position((
+                (text_area.x + 2 + Line::raw(query.as_str()).width() as u16)
+                    .min(text_area.right().saturating_sub(1)),
+                text_area.y,
+            ));
+
+            let items: Vec<ListItem> = entries
+                .iter()
+                .map(|e| {
+                    let st = e.state;
+                    let path_color = path_color(st);
+                    let (icon, icon_color) = icon_for(&e.path);
+                    let icon_color = if path_color == Color::Reset { icon_color } else { path_color };
+                    ListItem::new(Line::from(vec![
+                        Span::styled(st.x.to_string(), Style::new().fg(index_color(st))),
+                        Span::styled(st.y.to_string(), Style::new().fg(worktree_color(st))),
+                        Span::raw(" "),
+                        Span::styled(format!("{icon} "), Style::new().fg(icon_color)),
+                        Span::styled(e.path.as_str(), Style::new().fg(path_color)),
+                    ]))
+                })
+                .collect();
+            if show_help {
+                let lines = help_lines(&filters, &query);
+                let max = (lines.len() as u16).saturating_sub(list.height);
+                f.render_widget(Paragraph::new(lines).scroll((help_scroll.min(max), 0)), list);
+            } else {
+                f.render_stateful_widget(
+                    List::new(items)
+                        .highlight_symbol("▌")
+                        // Theme-native ANSI color (follows the terminal palette); never
+                        // REVERSED, which would turn per-span fg colors into blocks.
+                        .highlight_style(Style::new().bg(Color::DarkGray)),
+                    list,
+                    &mut state,
+                );
+            }
+
+            f.render_widget(
+                Paragraph::new(if show_help {
+                    "esc / q / ? close  ·  ↑↓ PgUp PgDn scroll".to_string()
+                } else {
+                    format!(
+                        "{}/{} files  ·  tab filter · ^g ^s ^u · ? help",
+                        entries.len(),
+                        total
+                    )
+                })
+                .style(Style::new().fg(Color::DarkGray)),
+                status,
+            );
+        })?;
+
+        let Event::Key(key) = event::read()? else {
+            continue;
+        };
+        if key.kind == KeyEventKind::Release {
+            continue;
+        }
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let sel = state.selected().unwrap_or(0);
+        let last = entries.len().saturating_sub(1);
+        let mut changed = false;
+
+        if show_help {
+            let page = terminal.size()?.height.saturating_sub(2);
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?') | KeyCode::F(1) | KeyCode::Enter => {
+                    show_help = false;
+                    help_scroll = 0;
+                }
+                KeyCode::Char('c') if ctrl => return Ok(None),
+                KeyCode::Up | KeyCode::Char('k') => help_scroll = help_scroll.saturating_sub(1),
+                KeyCode::Down | KeyCode::Char('j') => help_scroll = help_scroll.saturating_add(1),
+                KeyCode::PageUp => help_scroll = help_scroll.saturating_sub(page),
+                KeyCode::PageDown => help_scroll = help_scroll.saturating_add(page),
+                KeyCode::Home => help_scroll = 0,
+                _ => {}
+            }
+            continue;
+        }
+
+        match key.code {
+            KeyCode::Esc => return Ok(None),
+            KeyCode::Char('c') if ctrl => return Ok(None),
+            KeyCode::F(1) => show_help = true,
+            KeyCode::Char('?') if query.is_empty() => show_help = true,
+            KeyCode::Tab => {
+                filters.status = filters.status.next();
+                changed = true;
+            }
+            KeyCode::BackTab => {
+                // reverse cycle = 4 forward steps in a 5-cycle
+                for _ in 0..4 {
+                    filters.status = filters.status.next();
+                }
+                changed = true;
+            }
+            KeyCode::Char('g') if ctrl => {
+                filters.status = filters.status.toggle(StatusFilter::Changed);
+                changed = true;
+            }
+            KeyCode::Char('s') if ctrl => {
+                filters.status = filters.status.toggle(StatusFilter::Staged);
+                changed = true;
+            }
+            KeyCode::Char('u') if ctrl => {
+                filters.status = filters.status.toggle(StatusFilter::Unstaged);
+                changed = true;
+            }
+            KeyCode::Char('t') if ctrl => {
+                filters.status = filters.status.toggle(StatusFilter::Untracked);
+                changed = true;
+            }
+            KeyCode::Enter => {
+                if let Some(e) = entries.get(sel) {
+                    return Ok(Some(e.path.clone()));
+                }
+            }
+            KeyCode::Up => state.select(Some(sel.saturating_sub(1))),
+            KeyCode::Char('p') | KeyCode::Char('k') if ctrl => {
+                state.select(Some(sel.saturating_sub(1)))
+            }
+            KeyCode::Down => state.select(Some((sel + 1).min(last))),
+            KeyCode::Char('n') | KeyCode::Char('j') if ctrl => {
+                state.select(Some((sel + 1).min(last)))
+            }
+            KeyCode::PageUp => state.select(Some(sel.saturating_sub(10))),
+            KeyCode::PageDown => state.select(Some((sel + 10).min(last))),
+            KeyCode::Backspace => changed = query.pop().is_some(),
+            KeyCode::Char('x') if ctrl => {
+                changed = !query.is_empty();
+                query.clear();
+            }
+            KeyCode::Char('w') if ctrl => {
+                let t = query.trim_end().len();
+                let cut = query[..t].rfind(' ').map(|i| i + 1).unwrap_or(0);
+                query.truncate(cut);
+                changed = true;
+            }
+            KeyCode::Char(c) if !ctrl => {
+                query.push(c);
+                changed = true;
+            }
+            _ => {}
+        }
+
+        if changed {
+            let r = finder.search(&query, &filters, LIMIT);
+            total = r.total;
+            entries = r.entries;
+            state.select(Some(0));
+        }
+    }
+}
+
+
+// lazygit conventions: staged marker = green, unstaged / untracked marker = red.
+fn index_color(st: GitState) -> Color {
+    if st.is_conflicted() { Color::Red } else { Color::Green }
+}
+
+fn worktree_color(_st: GitState) -> Color {
+    Color::Red
+}
+
+fn path_color(st: GitState) -> Color {
+    // lazygit: only staged files get a colored name; unstaged / untracked
+    // files keep the default text color (just the status marker is red).
+    if st.is_conflicted() {
+        Color::Red
+    } else if st.has_staged() && st.has_unstaged() {
+        Color::Yellow
+    } else if st.has_staged() {
+        Color::Green
+    } else {
+        Color::Reset
+    }
+}
+
+/// (keys, description) rows per section. Keys are what the user presses.
+const HELP_SECTIONS: &[(&str, &[(&str, &str)])] = &[
+    (
+        "Navigate",
+        &[
+            ("↑ ↓  ^p ^n  ^k ^j", "move selection"),
+            ("PgUp PgDn", "jump 10 rows"),
+            ("enter", "select file and print its path"),
+            ("esc  ^c", "cancel (exit code 1)"),
+        ],
+    ),
+    (
+        "Edit query",
+        &[("^w", "delete last word"), ("^x", "clear the query")],
+    ),
+    (
+        "Git filter",
+        &[
+            ("tab  shift-tab", "cycle all → changed → staged → unstaged → untracked"),
+            ("^g", "changed: anything git reports"),
+            ("^s", "staged: has changes in the index"),
+            ("^u", "unstaged: modified in the worktree"),
+            ("^t", "untracked: new files"),
+        ],
+    ),
+    (
+        "Query syntax",
+        &[
+            ("text", "fuzzy match on the path"),
+            ("*.rs", "only this extension"),
+            ("/src/", "only inside this directory"),
+            ("!test", "exclude matches"),
+            ("type:rust", "by file type"),
+            ("status:modified", "also staged, untracked, unmodified (st: g: git:)"),
+        ],
+    ),
+];
+
+fn help_lines(filters: &Filters, query: &str) -> Vec<Line<'static>> {
+    const KEY_W: usize = 20;
+    let key = Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD);
+    let head = Style::new().add_modifier(Modifier::BOLD | Modifier::UNDERLINED);
+    let dim = Style::new().fg(Color::DarkGray);
+
+    let mut out: Vec<Line> = Vec::new();
+    for (i, (title, rows)) in HELP_SECTIONS.iter().enumerate() {
+        if i > 0 {
+            out.push(Line::raw(""));
+        }
+        out.push(Line::from(Span::styled(format!(" {title}"), head)));
+        for (keys, desc) in *rows {
+            out.push(Line::from(vec![
+                Span::styled(format!("   {keys:<KEY_W$}"), key),
+                Span::raw(*desc),
+            ]));
+        }
+    }
+
+    // Live state, so the help also answers "why am I seeing this list?".
+    out.push(Line::raw(""));
+    out.push(Line::from(Span::styled(" Active now", head)));
+    let mut now = vec![Span::styled(format!("   status: {}", filters.status.label()), dim)];
+    if !filters.exts.is_empty() {
+        now.push(Span::styled(format!("   ext: {}", filters.exts.join(", ")), dim));
+    }
+    if !filters.exclude.is_empty() {
+        now.push(Span::styled(format!("   exclude: {}", filters.exclude.join(", ")), dim));
+    }
+    if !query.is_empty() {
+        now.push(Span::styled(format!("   query: {query}"), dim));
+    }
+    out.push(Line::from(now));
+    out
+}
+
+/// Right-aligned chips for every active filter, e.g. `changed  *.rs  -vendor`.
+/// Chips are dropped from the end (excludes first) until they fit `max_width`.
+fn filter_chips(filters: &Filters, max_width: u16) -> Line<'static> {
+    let chip = |text: String, color: Color| {
+        Span::styled(format!(" {text} "), Style::new().fg(color).add_modifier(Modifier::BOLD))
+    };
+    let mut chips: Vec<Span<'static>> = Vec::new();
+    if filters.status != StatusFilter::All {
+        let color = match filters.status {
+            StatusFilter::Staged => Color::Green,
+            StatusFilter::Unstaged | StatusFilter::Untracked => Color::Red,
+            StatusFilter::Changed => Color::Yellow,
+            StatusFilter::Clean | StatusFilter::All => Color::Gray,
+        };
+        chips.push(chip(format!("● {}", filters.status.label()), color));
+    }
+    if !filters.exts.is_empty() {
+        let exts: Vec<String> = filters.exts.iter().map(|e| format!("*.{e}")).collect();
+        chips.push(chip(exts.join(" "), Color::Cyan));
+    }
+    if !filters.exclude.is_empty() {
+        let label = match filters.exclude.as_slice() {
+            [one] => format!("-{one}"),
+            many => format!("-{} excludes", many.len()),
+        };
+        chips.push(chip(label, Color::Magenta));
+    }
+    while !chips.is_empty() && Line::from(chips.clone()).width() as u16 > max_width {
+        chips.pop();
+    }
+    Line::from(chips)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn text(l: &Line) -> String {
+        l.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn chips_show_active_filters_and_drop_when_narrow() {
+        let f = Filters::new(StatusFilter::Staged, &["rs".into()], &["vendor".into()]);
+        assert_eq!(text(&filter_chips(&f, 80)), " ● staged  *.rs  -vendor ");
+        // excludes are dropped first, then extensions, then status
+        assert_eq!(text(&filter_chips(&f, 20)), " ● staged  *.rs ");
+        assert_eq!(text(&filter_chips(&f, 12)), " ● staged ");
+        assert_eq!(text(&filter_chips(&f, 3)), "");
+        assert_eq!(filter_chips(&Filters::default(), 80).width(), 0);
+    }
+}
