@@ -40,9 +40,11 @@ With [mise](https://mise.jdx.dev):
 mise use -g github:rawnly/bracco
 ```
 
-From [source](https://www.rust-lang.org/tools/install):
+From [crates.io](https://crates.io/crates/bracco) (needs a [Rust toolchain](https://www.rust-lang.org/tools/install)):
 
 ```sh
+cargo install bracco --locked
+# or the latest main:
 cargo install --git https://github.com/rawnly/bracco --locked
 ```
 

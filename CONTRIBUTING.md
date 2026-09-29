@@ -73,6 +73,14 @@ formula and uploads it as the `homebrew-formula` artifact, but skips the push.
 
 Render locally (checksums default to zeros): `BRACCO_FORMULA_OUT=/tmp/bracco.rb cargo check`.
 
+### crates.io
+
+The `crates-io` release job runs `cargo publish --locked` after the GitHub
+release succeeds. One-time setup: add a `CARGO_REGISTRY_TOKEN` repository secret
+(a crates.io API token with the `publish-new` and `publish-update` scopes).
+Without it the job is skipped. Publishing is irreversible (a version can only be
+yanked), so check `cargo publish --dry-run` when changing package metadata.
+
 ### If something fails
 
 - **Tag/version mismatch** — delete the tag (`git push --delete origin v0.2.0 && git tag -d v0.2.0`), fix `Cargo.toml`, and re-tag.

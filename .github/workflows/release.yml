@@ -4,6 +4,7 @@ name: release
 #   build (matrix) -> release (create GH release + upload archives)
 #   -> packslip (sign, read-only) -> publish-packslip (upload bundle)
 #   -> homebrew (render the formula with build.rs, push it to the tap)
+#   -> crates-io (cargo publish)
 
 on:
   push:
@@ -228,3 +229,24 @@ jobs:
           if git diff --cached --quiet; then echo "formula unchanged"; exit 0; fi
           git commit -m "$BIN $GITHUB_REF_NAME"
           git push
+
+  # Publishes the crate. Needs a `CARGO_REGISTRY_TOKEN` repository secret
+  # (crates.io API token with the publish-new / publish-update scopes);
+  # without it the job is a no-op. Runs after `release` so a crate is never
+  # published for a tag whose binaries failed to build.
+  crates-io:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Publish to crates.io
+        if: env.CARGO_REGISTRY_TOKEN != ''
+        run: cargo publish --locked
+      - name: Skipped
+        if: env.CARGO_REGISTRY_TOKEN == ''
+        run: echo "::notice::CARGO_REGISTRY_TOKEN is not set, skipping crates.io publish"

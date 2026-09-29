@@ -5,6 +5,11 @@ edition = "2024"
 description = "Fast fuzzy file picker: git-modified files first, respects .gitignore"
 license = "MIT"
 repository = "https://github.com/rawnly/bracco"
+homepage = "https://github.com/rawnly/bracco"
+readme = "README.md"
+keywords = ["fuzzy", "finder", "file-picker", "tui", "git"]
+categories = ["command-line-utilities"]
+exclude = [".github/", ".agents/", ".claude/", ".pi/", "assets/", "skills-lock.json", "lefthook.yml"]
 
 [dependencies]
 crossterm = "0.29.0"
