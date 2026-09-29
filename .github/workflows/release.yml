@@ -176,8 +176,9 @@ jobs:
 
   # Renders the Homebrew formula with build.rs (metadata from Cargo.toml,
   # checksums from the published archives) and pushes it to the tap. Needs a
-  # `HOMEBREW_TAP_TOKEN` secret (fine-grained PAT, contents:write on the tap
-  # repo); without it the formula is only uploaded as a workflow artifact.
+  # `HOMEBREW_TAP_DEPLOY_KEY` secret (private half of an SSH deploy key with
+  # write access on the tap repo); without it the formula is only uploaded as
+  # a workflow artifact.
   homebrew:
     needs: release
     runs-on: ubuntu-latest
@@ -185,7 +186,7 @@ jobs:
       contents: read
     env:
       TAP_REPO: rawnly/homebrew-tap
-      TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+      TAP_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -216,10 +217,14 @@ jobs:
           if-no-files-found: error
 
       - name: Push to the tap
-        if: env.TAP_TOKEN != ''
+        if: env.TAP_KEY != ''
         run: |
           set -euo pipefail
-          git clone --depth 1 "https://x-access-token:${TAP_TOKEN}@github.com/${TAP_REPO}.git" tap
+          mkdir -p ~/.ssh
+          ssh-keyscan -t ed25519,rsa github.com >> ~/.ssh/known_hosts
+          eval "$(ssh-agent -s)"
+          ssh-add - <<<"$TAP_KEY"
+          git clone --depth 1 "git@github.com:${TAP_REPO}.git" tap
           mkdir -p tap/Formula
           cp "Formula/$BIN.rb" "tap/Formula/$BIN.rb"
           cd tap

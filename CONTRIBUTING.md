@@ -67,9 +67,17 @@ exports their checksums as `BRACCO_SHA256_<TARGET>` and runs
 `BRACCO_FORMULA_OUT=Formula/bracco.rb cargo check` to render the final formula,
 then pushes it to [`rawnly/homebrew-tap`](https://github.com/rawnly/homebrew-tap).
 
-One-time setup: add a `HOMEBREW_TAP_TOKEN` repository secret (fine-grained PAT
-with `contents: write` on the tap repo). Without it the job still renders the
-formula and uploads it as the `homebrew-formula` artifact, but skips the push.
+One-time setup: create an SSH deploy key with write access on the tap repo and
+store its private half as the `HOMEBREW_TAP_DEPLOY_KEY` repository secret.
+Without the secret the job still renders the formula and uploads it as the
+`homebrew-formula` artifact, but skips the push.
+
+```sh
+ssh-keygen -t ed25519 -N "" -C "bracco release" -f /tmp/bracco-tap-key
+gh repo deploy-key add /tmp/bracco-tap-key.pub --repo rawnly/homebrew-tap --allow-write --title "bracco release"
+gh secret set HOMEBREW_TAP_DEPLOY_KEY --repo rawnly/bracco < /tmp/bracco-tap-key
+rm -P /tmp/bracco-tap-key /tmp/bracco-tap-key.pub
+```
 
 Render locally (checksums default to zeros): `BRACCO_FORMULA_OUT=/tmp/bracco.rb cargo check`.
 
