@@ -39,7 +39,11 @@ pub struct Window {
 
 impl Window {
     pub fn parse(spec: &str) -> Result<Self> {
-        let mut w = Window { position: Position::Right, percent: 50, hidden: false };
+        let mut w = Window {
+            position: Position::Right,
+            percent: 50,
+            hidden: false,
+        };
         for tok in spec.split(':').map(str::trim).filter(|t| !t.is_empty()) {
             match tok {
                 "right" => w.position = Position::Right,
@@ -135,6 +139,12 @@ impl Preview {
         }
     }
 
+    /// Forget what was rendered so the next `request` re-runs the command
+    /// even for the same path (its content may have changed).
+    pub fn invalidate(&mut self) {
+        self.requested = None;
+    }
+
     pub fn toggle(&mut self) {
         self.visible = !self.visible;
     }
@@ -148,7 +158,11 @@ impl Preview {
             self.loading = false;
             return;
         };
-        if self.requested.as_ref().is_some_and(|(p, c, r)| p == path && *c == cols && *r == rows) {
+        if self
+            .requested
+            .as_ref()
+            .is_some_and(|(p, c, r)| p == path && *c == cols && *r == rows)
+        {
             return;
         }
         if self.requested.as_ref().is_none_or(|(p, _, _)| p != path) {
@@ -208,7 +222,9 @@ fn worker(rx: Receiver<Req>, tx: Sender<Resp>) {
         while let Ok(r) = rx.try_recv() {
             req = r;
         }
-        let Some(bytes) = run(&req, &rx, &mut next) else { continue };
+        let Some(bytes) = run(&req, &rx, &mut next) else {
+            continue;
+        };
         let lines = parse_ansi(&String::from_utf8_lossy(&bytes));
         if tx.send(Resp { id: req.id, lines }).is_err() {
             return;
@@ -488,7 +504,10 @@ mod tests {
     #[test]
     fn window_spec() {
         let w = Window::parse("down:40%:hidden").unwrap();
-        assert_eq!((w.position, w.percent, w.hidden), (Position::Down, 40, true));
+        assert_eq!(
+            (w.position, w.percent, w.hidden),
+            (Position::Down, 40, true)
+        );
         assert_eq!(Window::parse("right:50%").unwrap().percent, 50);
         assert!(Window::parse("sideways").is_err());
         assert!(Window::parse("5%").is_err());
@@ -504,7 +523,8 @@ mod tests {
 
     #[test]
     fn ansi_keeps_colors_drops_everything_else() {
-        let l = parse_ansi("\x1b[31mred\x1b[0m plain\n\x1b]0;evil title\x07\x1b[2J\x1b[Hx\ry\tz\x07");
+        let l =
+            parse_ansi("\x1b[31mred\x1b[0m plain\n\x1b]0;evil title\x07\x1b[2J\x1b[Hx\ry\tz\x07");
         assert_eq!(l.len(), 2);
         assert_eq!(plain(&l[0]), "red plain");
         assert_eq!(l[0].spans[0].style.fg, Some(Color::Red));
@@ -518,7 +538,12 @@ mod tests {
         assert_eq!(l[0].spans[1].style.bg, Some(Color::Indexed(9)));
         assert_eq!(l[0].spans[1].style.fg, Some(Color::Rgb(10, 20, 30)));
         assert_eq!(l[0].spans[2].style, Style::new());
-        assert!(l[0].spans[3].style.add_modifier.contains(Modifier::UNDERLINED));
+        assert!(
+            l[0].spans[3]
+                .style
+                .add_modifier
+                .contains(Modifier::UNDERLINED)
+        );
     }
 
     #[test]

@@ -116,6 +116,18 @@ impl Finder {
         Ok(Self { picker })
     }
 
+    /// Re-scan the tree and re-read git status (files may have changed while
+    /// an external command had the terminal).
+    #[instrument(skip_all)]
+    pub fn refresh(&mut self) -> Result<()> {
+        let t = std::time::Instant::now();
+        self.picker
+            .collect_files()
+            .map_err(|e| eyre!("cannot rescan: {e}"))?;
+        info!(files = self.picker.get_files().len(), elapsed = ?t.elapsed(), "rescan finished");
+        Ok(())
+    }
+
     /// Files matching `query` and `filters` (all files if empty), git-changed
     /// ones first. The partition happens over *all* matches, then the result
     /// is truncated to `limit`.
@@ -287,6 +299,28 @@ mod tests {
         assert_eq!(paths(&f.search("*.rs", &all, 100)), ["a.rs"]);
         // constraint + 1-char text
         assert_eq!(paths(&f.search("*.toml c", &all, 100)), ["c.toml"]);
+    }
+
+    #[test]
+    fn refresh_picks_up_changes() {
+        let d = repo();
+        let root = d.path().canonicalize().unwrap();
+        let mut f = Finder::open(&root).unwrap();
+        assert!(
+            f.search("fresh", &Filters::default(), 10)
+                .entries
+                .is_empty()
+        );
+        std::fs::write(root.join("fresh.rs"), "x").unwrap();
+        std::fs::write(root.join("a.rs"), "changed").unwrap(); // was clean
+        f.refresh().unwrap();
+        let r = f.search("", &Filters::default(), 100);
+        let p = paths(&r);
+        assert!(p.contains(&"fresh.rs"));
+        assert!(
+            p[..3].contains(&"a.rs"),
+            "newly modified file sorts first: {p:?}"
+        );
     }
 
     #[test]

@@ -23,7 +23,11 @@ pub struct OnEnter {
 
 impl OnEnter {
     pub fn rel(&self, p: &str) -> String {
-        self.dir.join(p).to_string_lossy().trim_start_matches("./").to_owned()
+        self.dir
+            .join(p)
+            .to_string_lossy()
+            .trim_start_matches("./")
+            .to_owned()
     }
 
     pub fn abs(&self, p: &str) -> String {
@@ -77,7 +81,10 @@ mod tests {
     fn placeholders() {
         assert_eq!(oe("nvim {}").command("src/a.rs"), "nvim 'sub/src/a.rs'");
         assert_eq!(oe("nvim").command("a.rs"), "nvim 'sub/a.rs'");
-        assert_eq!(oe("cp {abs} /tmp/{}").command("a"), "cp '/repo/sub/a' /tmp/'sub/a'");
+        assert_eq!(
+            oe("cp {abs} /tmp/{}").command("a"),
+            "cp '/repo/sub/a' /tmp/'sub/a'"
+        );
     }
 
     #[test]

@@ -154,7 +154,7 @@ fn run(args: Args) -> Result<u8> {
     debug!(?args, "starting");
 
     let root = std::fs::canonicalize(&args.dir)?;
-    let finder = finder::Finder::open(&root)?;
+    let mut finder = finder::Finder::open(&root)?;
     let query = args.query.as_deref().unwrap_or("");
     let status = match (args.status.as_deref(), args.changed) {
         (Some(s), _) => StatusFilter::parse(s).ok_or_else(|| {
@@ -230,7 +230,7 @@ fn run(args: Args) -> Result<u8> {
         None => None,
     };
 
-    match tui::run(tty, &finder, query, filters, on_enter.as_ref(), preview)? {
+    match tui::run(tty, &mut finder, query, filters, on_enter.as_ref(), preview)? {
         tui::Outcome::Selected(p) => {
             info!(path = %p, "selected");
             write(&mut out, &p)?;

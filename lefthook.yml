@@ -1,6 +1,14 @@
 pre-commit:
   parallel: true
   jobs:
-    - run: cargo fmt {staged_files}
-      glob: "*.{rs}"
+    - name: fmt
+      run: rustfmt --edition 2024 {staged_files}
+      glob: "*.rs"
       stage_fixed: true
+
+pre-push:
+  jobs:
+    - name: clippy
+      run: cargo clippy --all-targets --locked -- -D warnings
+    - name: test
+      run: cargo test --locked

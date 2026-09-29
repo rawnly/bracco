@@ -44,7 +44,7 @@ pub enum Outcome {
 /// selected path.
 pub fn run(
     tty: std::fs::File,
-    finder: &Finder,
+    finder: &mut Finder,
     initial_query: &str,
     filters: Filters,
     on_enter: Option<&OnEnter>,
@@ -65,13 +65,21 @@ pub fn run(
     }));
 
     let mut terminal = Terminal::new(CrosstermBackend::new(tty.try_clone()?))?;
-    event_loop(&mut terminal, &tty, finder, initial_query, filters, on_enter, preview)
+    event_loop(
+        &mut terminal,
+        &tty,
+        finder,
+        initial_query,
+        filters,
+        on_enter,
+        preview,
+    )
 }
 
 fn event_loop(
     terminal: &mut Terminal<CrosstermBackend<std::fs::File>>,
     tty: &std::fs::File,
-    finder: &Finder,
+    finder: &mut Finder,
     initial_query: &str,
     mut filters: Filters,
     on_enter: Option<&OnEnter>,
@@ -89,10 +97,16 @@ fn event_loop(
         // Keep the preview in sync with the highlighted file and pane size.
         if let Some(pv) = preview.as_mut().filter(|p| p.visible) {
             let [_, list, _] = main_areas(terminal.size()?.into());
-            let inner = pv.window.split(list).1.map(|r| pane_block(pv.window.position).inner(r));
+            let inner = pv
+                .window
+                .split(list)
+                .1
+                .map(|r| pane_block(pv.window.position).inner(r));
             match inner {
                 Some(r) => {
-                    let sel = entries.get(state.selected().unwrap_or(0)).map(|e| e.path.as_str());
+                    let sel = entries
+                        .get(state.selected().unwrap_or(0))
+                        .map(|e| e.path.as_str());
                     pv.request(sel, r.width, r.height);
                 }
                 None => pv.request(None, 0, 0),
@@ -167,7 +181,10 @@ fn event_loop(
                         inner,
                     );
                 } else {
-                    f.render_widget(Paragraph::new(pv.lines.clone()).scroll((pv.scroll, 0)), inner);
+                    f.render_widget(
+                        Paragraph::new(pv.lines.clone()).scroll((pv.scroll, 0)),
+                        inner,
+                    );
                 }
             }
 
@@ -339,6 +356,25 @@ fn event_loop(
                     tracing::info!(code, "on-enter finished");
                     if !oe.keep_open {
                         return Ok(Outcome::Executed(code));
+                    }
+                    // Back from the command: it may have edited / created /
+                    // deleted files, so rescan and keep query, filters and the
+                    // highlighted file.
+                    let keep = e.path.clone();
+                    match finder.refresh() {
+                        Ok(()) => {
+                            let r = finder.search(&query, &filters, LIMIT);
+                            total = r.total;
+                            entries = r.entries;
+                            let idx = entries.iter().position(|x| x.path == keep);
+                            state.select(Some(
+                                idx.unwrap_or(sel.min(entries.len().saturating_sub(1))),
+                            ));
+                            if let Some(pv) = preview.as_mut() {
+                                pv.invalidate();
+                            }
+                        }
+                        Err(err) => tracing::warn!(error = %err, "refresh failed"),
                     }
                 }
             }
@@ -541,26 +577,6 @@ fn filter_chips(filters: &Filters, max_width: u16) -> Line<'static> {
     Line::from(chips)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn text(l: &Line) -> String {
-        l.spans.iter().map(|s| s.content.as_ref()).collect()
-    }
-
-    #[test]
-    fn chips_show_active_filters_and_drop_when_narrow() {
-        let f = Filters::new(StatusFilter::Staged, &["rs".into()], &["vendor".into()]);
-        assert_eq!(text(&filter_chips(&f, 80)), " ● staged  *.rs  -vendor ");
-        // excludes are dropped first, then extensions, then status
-        assert_eq!(text(&filter_chips(&f, 20)), " ● staged  *.rs ");
-        assert_eq!(text(&filter_chips(&f, 12)), " ● staged ");
-        assert_eq!(text(&filter_chips(&f, 3)), "");
-        assert_eq!(filter_chips(&Filters::default(), 80).width(), 0);
-    }
-}
-
 fn main_areas(area: ratatui::layout::Rect) -> [ratatui::layout::Rect; 3] {
     Layout::vertical([
         Constraint::Length(1),
@@ -579,5 +595,27 @@ fn pane_block(pos: Position) -> ratatui::widgets::Block<'static> {
         Position::Down => Borders::TOP,
         Position::Up => Borders::BOTTOM,
     };
-    Block::new().borders(side).border_style(Style::new().fg(Color::DarkGray))
+    Block::new()
+        .borders(side)
+        .border_style(Style::new().fg(Color::DarkGray))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn text(l: &Line) -> String {
+        l.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn chips_show_active_filters_and_drop_when_narrow() {
+        let f = Filters::new(StatusFilter::Staged, &["rs".into()], &["vendor".into()]);
+        assert_eq!(text(&filter_chips(&f, 80)), " ● staged  *.rs  -vendor ");
+        // excludes are dropped first, then extensions, then status
+        assert_eq!(text(&filter_chips(&f, 20)), " ● staged  *.rs ");
+        assert_eq!(text(&filter_chips(&f, 12)), " ● staged ");
+        assert_eq!(text(&filter_chips(&f, 3)), "");
+        assert_eq!(filter_chips(&Filters::default(), 80).width(), 0);
+    }
 }
