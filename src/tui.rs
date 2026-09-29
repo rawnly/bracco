@@ -407,7 +407,7 @@ fn event_loop(
                 filters.status = filters.status.toggle(StatusFilter::Untracked);
                 changed = true;
             }
-            KeyCode::Enter => {
+            KeyCode::Enter if !ctrl => {
                 if let Some(e) = entries.get(sel) {
                     let Some(oe) = on_enter else {
                         return Ok(Outcome::Selected(e.path.clone()));
@@ -454,6 +454,9 @@ fn event_loop(
             KeyCode::Char('p') | KeyCode::Char('k') if ctrl => {
                 state.select(Some(sel.saturating_sub(1)))
             }
+            // Some terminals encode Ctrl-J as Ctrl-Enter because both produce
+            // a line-feed byte. Preserve the common Ctrl-J navigation binding.
+            KeyCode::Enter if ctrl => state.select(Some((sel + 1).min(last))),
             KeyCode::Down => state.select(Some((sel + 1).min(last))),
             KeyCode::Char('n') | KeyCode::Char('j') if ctrl => {
                 state.select(Some((sel + 1).min(last)))

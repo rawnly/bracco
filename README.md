@@ -114,7 +114,7 @@ the command's own exit code.
 
 | Key | Action |
 | --- | --- |
-| `↑` `↓` `^p` `^n` | Move selection |
+| `↑` `↓` `^p` `^n` `^k` `^j` | Move selection |
 | `enter` | Select (print path or run `--exec`) |
 | `tab` / `shift-tab` | Cycle git status filter |
 | `^g` `^s` `^a` `^t` | Toggle changed / staged / unstaged / untracked |
@@ -155,7 +155,27 @@ the command's own exit code.
 | `BRACCO_VIM` | `--vim` |
 | `BRACCO_LOG_FILE` | `--log-file` |
 
-### Shell completions
+### Shell integration
+
+Source Bracco's shell integration to enable fzf-style fuzzy path completion.
+Type `nvim **` and press Tab to choose a file; the selected path is inserted
+into the command line. Supported shells: bash, zsh, fish, and PowerShell. In
+bash, ordinary Tab falls back to basic file completion; the other integrations
+preserve their shell's normal Tab completion.
+
+```sh
+# Bash (~/.bashrc)
+bracco shell-integration bash >> ~/.bashrc
+# Zsh (~/.zshrc)
+bracco shell-integration zsh >> ~/.zshrc
+# Fish (~/.config/fish/config.fish)
+bracco shell-integration fish >> ~/.config/fish/config.fish
+# PowerShell ($PROFILE)
+bracco shell-integration powershell >> $PROFILE
+```
+
+Elvish and Nushell currently have argument completions, but no fuzzy shell
+integration. Shell argument completion is available separately:
 
 ```sh
 bracco completions zsh > ~/.zfunc/_bracco   # bash, zsh, fish, elvish, nu, powershell

@@ -105,6 +105,8 @@ struct Args {
 enum Command {
     /// Print a shell completion script
     Completions(Completions),
+    /// Print shell integration for fuzzy path completion
+    ShellIntegration(ShellIntegration),
     /// Print the usage spec (input for `usage generate manpage|markdown`)
     Spec(Spec),
 }
@@ -113,6 +115,13 @@ enum Command {
 struct Completions {
     /// Target shell
     #[usage(choices("bash", "zsh", "fish", "elvish", "nu", "powershell"))]
+    shell: String,
+}
+
+#[derive(Debug, usage::Args)]
+struct ShellIntegration {
+    /// Target shell
+    #[usage(choices("bash", "zsh", "fish", "powershell"))]
     shell: String,
 }
 
@@ -145,6 +154,15 @@ fn generate(cmd: &Command) -> Result<()> {
             };
             Args::completion_script(shell)
         }
+        Command::ShellIntegration(s) => match s.shell.as_str() {
+            "bash" => include_str!("../shell/bracco.bash").to_owned(),
+            "zsh" => include_str!("../shell/bracco.zsh").to_owned(),
+            "fish" => include_str!("../shell/bracco.fish").to_owned(),
+            "powershell" => include_str!("../shell/bracco.ps1").to_owned(),
+            shell => bail!(
+                "shell integration is not available for `{shell}` (supported: bash, zsh, fish, powershell)"
+            ),
+        },
     };
     print!("{text}");
     Ok(())
