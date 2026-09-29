@@ -15,8 +15,6 @@
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
 </p>
 
-> Formerly `fff-picker`. The old `FFF_PICKER_*` environment variables are still honored.
-
 ## Features
 
 - **Git-aware ranking**: modified, staged and untracked files float to the top; filter by status with `tab`.

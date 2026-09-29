@@ -258,21 +258,7 @@ fn run(args: Args) -> Result<u8> {
     }
 }
 
-/// Before the rename the project was `fff-picker`: keep honoring FFF_PICKER_*.
-fn migrate_legacy_env() {
-    for name in ["LOG_FILE", "EXEC", "PREVIEW", "VIM"] {
-        let (old, new) = (format!("FFF_PICKER_{name}"), format!("BRACCO_{name}"));
-        if std::env::var_os(&new).is_none()
-            && let Some(v) = std::env::var_os(&old)
-        {
-            // SAFETY: called first thing in main, before any other thread exists.
-            unsafe { std::env::set_var(&new, v) };
-        }
-    }
-}
-
 fn main() -> ExitCode {
-    migrate_legacy_env();
     // Handles --help / --version / usage errors itself.
     let args = Args::parse();
     match run(args) {

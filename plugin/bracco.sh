@@ -10,7 +10,7 @@ set -euo pipefail
 
 HERDR="${HERDR_BIN_PATH:-herdr}"
 PLUGIN="${HERDR_PLUGIN_ID:-dev.rawnly.bracco}"
-PICKER="${BRACCO_BIN:-${FFF_PICKER_BIN:-bracco}}"
+PICKER="${BRACCO_BIN:-bracco}"
 
 die() { printf 'bracco plugin: %s\n' "$*" >&2; exit 1; }
 
@@ -39,7 +39,7 @@ case "${1:-}" in
 
   edit)
     [[ -n "${BRACCO_FILE:-}" ]] || die "BRACCO_FILE is not set"
-    editor="${BRACCO_EDITOR:-${FFF_PICKER_EDITOR:-${VISUAL:-${EDITOR:-vi}}}}"
+    editor="${BRACCO_EDITOR:-${VISUAL:-${EDITOR:-vi}}}"
     # $editor may carry args (e.g. "code -w"), so let the shell split it.
     # shellcheck disable=SC2086
     exec $editor "$BRACCO_FILE"
