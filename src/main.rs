@@ -88,6 +88,11 @@ struct Args {
     #[usage(long, default = "right:50%", value_name = "SPEC")]
     preview_window: String,
 
+    /// Vim-style modal keys: start in normal mode (j/k move, J/K scroll preview,
+    /// g/G top/bottom, q quit); `/` or `i` to search, esc to leave search
+    #[usage(long, env = "FFF_PICKER_VIM")]
+    vim: bool,
+
     /// Directory to search
     #[usage(default = ".", value_hint = usage::ValueHint::DirPath)]
     dir: PathBuf,
@@ -230,7 +235,15 @@ fn run(args: Args) -> Result<u8> {
         None => None,
     };
 
-    match tui::run(tty, &mut finder, query, filters, on_enter.as_ref(), preview)? {
+    match tui::run(
+        tty,
+        &mut finder,
+        query,
+        filters,
+        on_enter.as_ref(),
+        preview,
+        args.vim,
+    )? {
         tui::Outcome::Selected(p) => {
             info!(path = %p, "selected");
             write(&mut out, &p)?;

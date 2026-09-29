@@ -69,6 +69,7 @@ fff-picker [FLAGS] [DIR]
   -c, --changed            Shortcut for --status changed
   -e, --ext <EXT>          Only files with this extension (repeatable / comma-separated)
   -x, --exclude <GLOB>     Exclude paths matching this glob (repeatable)
+      --vim                Vim-style modal keys (j/k, J/K, g/G, / to search) [env: FFF_PICKER_VIM]
       --log-file <FILE>    Write logs to FILE (level via RUST_LOG) [env: FFF_PICKER_LOG_FILE]
 ```
 

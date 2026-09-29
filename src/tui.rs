@@ -49,6 +49,7 @@ pub fn run(
     filters: Filters,
     on_enter: Option<&OnEnter>,
     preview: Option<Preview>,
+    vim: bool,
 ) -> Result<Outcome> {
     enable_raw_mode()?;
     let mut out = tty.try_clone()?;
@@ -73,9 +74,11 @@ pub fn run(
         filters,
         on_enter,
         preview,
+        vim,
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn event_loop(
     terminal: &mut Terminal<CrosstermBackend<std::fs::File>>,
     tty: &std::fs::File,
@@ -84,7 +87,11 @@ fn event_loop(
     mut filters: Filters,
     on_enter: Option<&OnEnter>,
     mut preview: Option<Preview>,
+    vim: bool,
 ) -> Result<Outcome> {
+    // With --vim the picker starts in normal mode; `/`, `i` or `a` enter the
+    // search (insert) mode and esc goes back. Without --vim it is always insert.
+    let mut insert = !vim;
     let mut show_help = false;
     let mut help_scroll: u16 = 0;
     let mut query = initial_query.to_string();
@@ -129,12 +136,19 @@ fn event_loop(
 
             let prompt = Span::styled(
                 "❯ ",
-                Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                Style::new()
+                    .fg(if insert { Color::Cyan } else { Color::DarkGray })
+                    .add_modifier(Modifier::BOLD),
             );
             let text = if query.is_empty() {
+                let hint = if insert {
+                    "type to search…"
+                } else {
+                    "press / to search"
+                };
                 Line::from(vec![
                     prompt,
-                    Span::styled("type to search…", Style::new().fg(Color::DarkGray)),
+                    Span::styled(hint, Style::new().fg(Color::DarkGray)),
                 ])
             } else {
                 Line::from(vec![prompt, Span::raw(query.as_str())])
@@ -145,11 +159,13 @@ fn event_loop(
                 chips_area,
             );
 
-            f.set_cursor_position((
-                (text_area.x + 2 + Line::raw(query.as_str()).width() as u16)
-                    .min(text_area.right().saturating_sub(1)),
-                text_area.y,
-            ));
+            if insert {
+                f.set_cursor_position((
+                    (text_area.x + 2 + Line::raw(query.as_str()).width() as u16)
+                        .min(text_area.right().saturating_sub(1)),
+                    text_area.y,
+                ));
+            }
 
             let items: Vec<ListItem> = entries
                 .iter()
@@ -210,6 +226,18 @@ fn event_loop(
             f.render_widget(
                 Paragraph::new(if show_help {
                     "esc / q / ? close  ·  ↑↓ PgUp PgDn scroll".to_string()
+                } else if vim && !insert {
+                    format!(
+                        "NORMAL  {}/{} files  ·  j/k move · J/K preview · / search · ? help",
+                        entries.len(),
+                        total
+                    )
+                } else if vim {
+                    format!(
+                        "INSERT  {}/{} files  ·  esc normal mode · enter open · ? help",
+                        entries.len(),
+                        total
+                    )
                 } else {
                     format!(
                         "{}/{} files  ·  tab filter · ^g ^s ^a · ? help",
@@ -268,7 +296,49 @@ fn event_loop(
 
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
 
+        if vim && !insert && !ctrl {
+            let page = preview.as_ref().map_or(0, |p| p.page());
+            match key.code {
+                KeyCode::Char('j') => state.select(Some((sel + 1).min(last))),
+                KeyCode::Char('k') => state.select(Some(sel.saturating_sub(1))),
+                KeyCode::Char('J') => {
+                    if let Some(pv) = preview.as_mut() {
+                        pv.scroll_by(1);
+                    }
+                }
+                KeyCode::Char('K') => {
+                    if let Some(pv) = preview.as_mut() {
+                        pv.scroll_by(-1);
+                    }
+                }
+                KeyCode::Char('g') => state.select(Some(0)),
+                KeyCode::Char('G') => state.select(Some(last)),
+                KeyCode::Char('/') | KeyCode::Char('i') | KeyCode::Char('a') => insert = true,
+                KeyCode::Char('q') => return Ok(Outcome::Cancelled),
+                KeyCode::Char('?') => show_help = true,
+                KeyCode::Char('d') => state.select(Some((sel + 10).min(last))),
+                KeyCode::Char('u') => state.select(Some(sel.saturating_sub(10))),
+                KeyCode::Char('f') => {
+                    if let Some(pv) = preview.as_mut() {
+                        pv.scroll_by(page);
+                    }
+                }
+                KeyCode::Char('b') => {
+                    if let Some(pv) = preview.as_mut() {
+                        pv.scroll_by(-page);
+                    }
+                }
+                // Plain characters never edit the query outside insert mode.
+                KeyCode::Char(_) => {}
+                _ => {}
+            }
+            if matches!(key.code, KeyCode::Char(_)) {
+                continue;
+            }
+        }
+
         match key.code {
+            KeyCode::Esc if vim && insert => insert = false,
             KeyCode::Esc => return Ok(Outcome::Cancelled),
             KeyCode::Char('o') if ctrl => {
                 if let Some(pv) = preview.as_mut() {
@@ -307,7 +377,7 @@ fn event_loop(
             }
             KeyCode::Char('c') if ctrl => return Ok(Outcome::Cancelled),
             KeyCode::F(1) => show_help = true,
-            KeyCode::Char('?') if query.is_empty() => show_help = true,
+            KeyCode::Char('?') if query.is_empty() && !vim => show_help = true,
             KeyCode::Tab => {
                 filters.status = filters.status.next();
                 changed = true;
@@ -451,6 +521,17 @@ const HELP_SECTIONS: &[(&str, &[(&str, &str)])] = &[
             ("PgUp PgDn", "jump 10 rows"),
             ("enter", "select file and print its path"),
             ("esc  ^c", "cancel (exit code 1)"),
+        ],
+    ),
+    (
+        "Vim mode (--vim)",
+        &[
+            ("j k  g G", "move selection / jump to top / bottom"),
+            ("d u", "jump 10 rows down / up"),
+            ("J K  f b", "scroll preview by line / by page"),
+            ("/ i a", "enter search (insert mode)"),
+            ("esc", "insert → normal; normal → cancel"),
+            ("q", "cancel (normal mode)"),
         ],
     ),
     (
