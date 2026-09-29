@@ -1,6 +1,12 @@
 {
   "version": 1,
   "skills": {
+    "herdr": {
+      "source": "herdrdev/herdr",
+      "sourceType": "github",
+      "skillPath": "skills/herdr/SKILL.md",
+      "computedHash": "c741134cc22372c08da2f469d49aac9f9bbddd4f5e1da0558cf1132836fa3287"
+    },
     "tui-design": {
       "source": "hyperb1iss/hyperskills",
       "sourceType": "github",
