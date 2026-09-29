@@ -12,6 +12,7 @@
 <p align="center">
   <a href="https://github.com/rawnly/bracco/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/rawnly/bracco/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://github.com/rawnly/bracco/releases"><img alt="Release" src="https://img.shields.io/github/v/release/rawnly/bracco"></a>
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
 </p>
 
 > Formerly `fff-picker`. The old `FFF_PICKER_*` environment variables are still honored.
@@ -171,3 +172,7 @@ your herdr config.
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and the release process.
+
+## License
+
+[MIT](LICENSE) © Federico Vitale

@@ -2,6 +2,9 @@
 name = "bracco"
 version = "0.1.2"
 edition = "2024"
+description = "Fast fuzzy file picker: git-modified files first, respects .gitignore"
+license = "MIT"
+repository = "https://github.com/rawnly/bracco"
 
 [dependencies]
 crossterm = "0.29.0"
