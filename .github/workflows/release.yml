@@ -17,7 +17,7 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  BIN: fff-picker
+  BIN: bracco
 
 jobs:
   build:
@@ -136,14 +136,14 @@ jobs:
       - uses: jdx/packslip@v1
         id: packslip
         with:
-          download: fff-picker-*.tar.xz
-          bin: fff-picker=bin/fff-picker
+          download: bracco-*.tar.xz
+          bin: bracco=bin/bracco
           resources: |
-            man=archive:share/man/man1/fff-picker.1
-            cli-spec/usage/fff-picker=archive:share/usage/fff-picker.kdl
-            completion/bash/fff-picker=archive:share/bash-completion/completions/fff-picker
-            completion/zsh/fff-picker=archive:share/zsh/site-functions/_fff-picker
-            completion/fish/fff-picker=archive:share/fish/vendor_completions.d/fff-picker.fish
+            man=archive:share/man/man1/bracco.1
+            cli-spec/usage/bracco=archive:share/usage/bracco.kdl
+            completion/bash/bracco=archive:share/bash-completion/completions/bracco
+            completion/zsh/bracco=archive:share/zsh/site-functions/_bracco
+            completion/fish/bracco=archive:share/fish/vendor_completions.d/bracco.fish
           upload: false
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:

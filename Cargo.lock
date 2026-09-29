@@ -134,6 +134,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "bracco"
+version = "0.1.2"
+dependencies = [
+ "crossterm",
+ "eyre",
+ "fff-search",
+ "ratatui",
+ "tempfile",
+ "tracing",
+ "tracing-subscriber",
+ "usage-rs",
+]
+
+[[package]]
 name = "bstr"
 version = "1.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -557,20 +571,6 @@ dependencies = [
  "notify-types",
  "rustc-hash",
  "walkdir",
-]
-
-[[package]]
-name = "fff-picker"
-version = "0.1.2"
-dependencies = [
- "crossterm",
- "eyre",
- "fff-search",
- "ratatui",
- "tempfile",
- "tracing",
- "tracing-subscriber",
- "usage-rs",
 ]
 
 [[package]]

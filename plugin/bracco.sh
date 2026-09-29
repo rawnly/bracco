@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# Herdr plugin entrypoint for fff-picker.
+# Herdr plugin entrypoint for bracco.
 #
 #   launch  action: open the picker popup in the caller's cwd
-#   picker  popup:  run fff-picker, then open the editor overlay on the result
-#   edit    overlay: exec $FFF_PICKER_EDITOR / $VISUAL / $EDITOR on $FFF_PICKER_FILE
+#   picker  popup:  run bracco, then open the editor overlay on the result
+#   edit    overlay: exec $BRACCO_EDITOR / $VISUAL / $EDITOR on $BRACCO_FILE
 #
-# Env knobs: FFF_PICKER_BIN (default fff-picker), FFF_PICKER_EDITOR.
+# Env knobs: BRACCO_BIN (default bracco), BRACCO_EDITOR.
 set -euo pipefail
 
 HERDR="${HERDR_BIN_PATH:-herdr}"
-PLUGIN="${HERDR_PLUGIN_ID:-dev.rawnly.fff-picker}"
-PICKER="${FFF_PICKER_BIN:-fff-picker}"
+PLUGIN="${HERDR_PLUGIN_ID:-dev.rawnly.bracco}"
+PICKER="${BRACCO_BIN:-${FFF_PICKER_BIN:-bracco}}"
 
-die() { printf 'fff-picker plugin: %s\n' "$*" >&2; exit 1; }
+die() { printf 'bracco plugin: %s\n' "$*" >&2; exit 1; }
 
 context_cwd() {
   local cwd=""
@@ -34,15 +34,15 @@ case "${1:-}" in
     file=$("$PICKER" --absolute) || exit 0   # cancelled / no match: just close
     [[ -n "$file" ]] || exit 0
     "$HERDR" plugin pane open --plugin "$PLUGIN" --entrypoint editor \
-      --placement overlay --cwd "$PWD" --env "FFF_PICKER_FILE=$file" --focus
+      --placement overlay --cwd "$PWD" --env "BRACCO_FILE=$file" --focus
     ;;
 
   edit)
-    [[ -n "${FFF_PICKER_FILE:-}" ]] || die "FFF_PICKER_FILE is not set"
-    editor="${FFF_PICKER_EDITOR:-${VISUAL:-${EDITOR:-vi}}}"
+    [[ -n "${BRACCO_FILE:-}" ]] || die "BRACCO_FILE is not set"
+    editor="${BRACCO_EDITOR:-${FFF_PICKER_EDITOR:-${VISUAL:-${EDITOR:-vi}}}}"
     # $editor may carry args (e.g. "code -w"), so let the shell split it.
     # shellcheck disable=SC2086
-    exec $editor "$FFF_PICKER_FILE"
+    exec $editor "$BRACCO_FILE"
     ;;
 
   *) die "usage: $0 launch|picker|edit" ;;

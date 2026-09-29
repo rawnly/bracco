@@ -21,7 +21,7 @@ use usage::Cli;
 /// Exit code: 0 selected, 1 cancelled / no match, 2 error. With --exec, the
 /// command's own exit code.
 #[derive(Debug, Cli)]
-#[usage(bin = "fff-picker", version = env!("CARGO_PKG_VERSION"), unknown_flags = "error", completion)]
+#[usage(bin = "bracco", version = env!("CARGO_PKG_VERSION"), unknown_flags = "error", completion)]
 struct Args {
     /// Initial query (interactive) or the query to run (--list)
     #[usage(short, long)]
@@ -43,8 +43,8 @@ struct Args {
     #[usage(short = '0', long)]
     print0: bool,
 
-    /// Write logs to this file (level via RUST_LOG, default fff_picker=debug)
-    #[usage(long, env = "FFF_PICKER_LOG_FILE", value_hint = usage::ValueHint::FilePath)]
+    /// Write logs to this file (level via RUST_LOG, default bracco=debug)
+    #[usage(long, env = "BRACCO_LOG_FILE", value_hint = usage::ValueHint::FilePath)]
     log_file: Option<PathBuf>,
 
     /// Only files with this git status: all, changed, staged, unstaged, untracked, clean
@@ -68,7 +68,7 @@ struct Args {
 
     /// Run this shell command when pressing enter, instead of printing the path.
     /// `{}` = quoted relative path, `{abs}` = absolute path (else appended). e.g. -E 'nvim {}'
-    #[usage(short = 'E', long, env = "FFF_PICKER_EXEC", value_name = "CMD")]
+    #[usage(short = 'E', long, env = "BRACCO_EXEC", value_name = "CMD")]
     exec: Option<String>,
 
     /// Shortcut for --exec '$VISUAL / $EDITOR / vi'
@@ -81,7 +81,7 @@ struct Args {
 
     /// Show the output of this command for the highlighted file in a side pane.
     /// Same placeholders as --exec. e.g. --preview 'bat --color=always {}'
-    #[usage(long, env = "FFF_PICKER_PREVIEW", value_name = "CMD")]
+    #[usage(long, env = "BRACCO_PREVIEW", value_name = "CMD")]
     preview: Option<String>,
 
     /// Preview pane placement: [right|left|up|down][:N%][:hidden]
@@ -90,7 +90,7 @@ struct Args {
 
     /// Vim-style modal keys: start in normal mode (j/k move, J/K scroll preview,
     /// g/G top/bottom, q quit); `/` or `i` to search, esc to leave search
-    #[usage(long, env = "FFF_PICKER_VIM")]
+    #[usage(long, env = "BRACCO_VIM")]
     vim: bool,
 
     /// Directory to search
@@ -127,7 +127,7 @@ fn init_logging(path: Option<&PathBuf>) -> Result<()> {
         .append(true)
         .open(path)?;
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| "fff_picker=debug".into());
+        .unwrap_or_else(|_| "bracco=debug".into());
     tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_writer(std::sync::Mutex::new(file))
@@ -258,14 +258,28 @@ fn run(args: Args) -> Result<u8> {
     }
 }
 
+/// Before the rename the project was `fff-picker`: keep honoring FFF_PICKER_*.
+fn migrate_legacy_env() {
+    for name in ["LOG_FILE", "EXEC", "PREVIEW", "VIM"] {
+        let (old, new) = (format!("FFF_PICKER_{name}"), format!("BRACCO_{name}"));
+        if std::env::var_os(&new).is_none()
+            && let Some(v) = std::env::var_os(&old)
+        {
+            // SAFETY: called first thing in main, before any other thread exists.
+            unsafe { std::env::set_var(&new, v) };
+        }
+    }
+}
+
 fn main() -> ExitCode {
+    migrate_legacy_env();
     // Handles --help / --version / usage errors itself.
     let args = Args::parse();
     match run(args) {
         Ok(code) => ExitCode::from(code),
         Err(e) => {
             tracing::error!(error = %e, "failed");
-            eprintln!("fff-picker: {e}");
+            eprintln!("bracco: {e}");
             ExitCode::from(2)
         }
     }
