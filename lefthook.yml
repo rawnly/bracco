@@ -5,9 +5,14 @@ pre-commit:
       run: rustfmt --edition 2024 {staged_files}
       glob: "*.rs"
       stage_fixed: true
+    - name: Update lockfile
+      run: cargo check --offline
+      stage_fixed: true
 
 pre-push:
   jobs:
+    - name: release-tag-version
+      run: scripts/check-release-version.sh --pushed-tags
     - name: clippy
       run: cargo clippy --all-targets --locked -- -D warnings
     - name: test
