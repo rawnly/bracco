@@ -1,15 +1,15 @@
 [package]
 name = "bracco"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 description = "Fast fuzzy file picker: git-modified files first, respects .gitignore"
-license = "MIT"
-repository = "https://github.com/rawnly/bracco"
-homepage = "https://github.com/rawnly/bracco"
 readme = "README.md"
-keywords = ["fuzzy", "finder", "file-picker", "tui", "git"]
+homepage = "https://github.com/rawnly/bracco"
+repository = "https://github.com/rawnly/bracco"
+license = "MIT"
+keywords = ["file-picker", "finder", "fuzzy", "git", "tui"]
 categories = ["command-line-utilities"]
-exclude = [".github/", ".agents/", ".claude/", ".pi/", "assets/", "skills-lock.json", "lefthook.yml"]
+exclude = [".agents/", ".claude/", ".github/", ".pi/", "assets/", "lefthook.yml", "skills-lock.json"]
 
 [dependencies]
 crossterm = "0.29.0"
