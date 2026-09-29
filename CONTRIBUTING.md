@@ -58,6 +58,21 @@ by pushing a `v*` tag.
 5. **Check the published release**: download the bundle and an archive from
    the release page and run the [verify](#verify-a-download) command above.
 
+### Homebrew formula
+
+`build.rs` renders `packaging/homebrew/formula.rb.in` using the metadata in
+`Cargo.toml` (version, description, license, repository), so edit those, not the
+template output. The `homebrew` release job downloads the published archives,
+exports their checksums as `BRACCO_SHA256_<TARGET>` and runs
+`BRACCO_FORMULA_OUT=Formula/bracco.rb cargo check` to render the final formula,
+then pushes it to [`rawnly/homebrew-tap`](https://github.com/rawnly/homebrew-tap).
+
+One-time setup: add a `HOMEBREW_TAP_TOKEN` repository secret (fine-grained PAT
+with `contents: write` on the tap repo). Without it the job still renders the
+formula and uploads it as the `homebrew-formula` artifact, but skips the push.
+
+Render locally (checksums default to zeros): `BRACCO_FORMULA_OUT=/tmp/bracco.rb cargo check`.
+
 ### If something fails
 
 - **Tag/version mismatch** — delete the tag (`git push --delete origin v0.2.0 && git tag -d v0.2.0`), fix `Cargo.toml`, and re-tag.

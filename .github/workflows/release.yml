@@ -3,6 +3,7 @@ name: release
 # Push a tag like `v0.1.0` (matching Cargo.toml's version) to cut a release:
 #   build (matrix) -> release (create GH release + upload archives)
 #   -> packslip (sign, read-only) -> publish-packslip (upload bundle)
+#   -> homebrew (render the formula with build.rs, push it to the tap)
 
 on:
   push:
@@ -171,3 +172,59 @@ jobs:
           test -f packslip/packslip.sigstore.json
           gh release upload "$GITHUB_REF_NAME" packslip/packslip.sigstore.json \
             --repo "$GITHUB_REPOSITORY" --clobber
+
+  # Renders the Homebrew formula with build.rs (metadata from Cargo.toml,
+  # checksums from the published archives) and pushes it to the tap. Needs a
+  # `HOMEBREW_TAP_TOKEN` secret (fine-grained PAT, contents:write on the tap
+  # repo); without it the formula is only uploaded as a workflow artifact.
+  homebrew:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      TAP_REPO: rawnly/homebrew-tap
+      TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Download archives and compute checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --pattern "$BIN-*.tar.xz" --dir out
+          for f in out/$BIN-*.tar.xz; do
+            target=${f#out/$BIN-}; target=${target%.tar.xz}
+            var="BRACCO_SHA256_$(echo "$target" | tr 'a-z-' 'A-Z_')"
+            echo "$var=$(sha256sum "$f" | cut -d' ' -f1)" | tee -a "$GITHUB_ENV"
+          done
+
+      - name: Render formula (build.rs)
+        run: BRACCO_FORMULA_OUT="$PWD/Formula/$BIN.rb" cargo check --locked
+
+      - run: cat "Formula/$BIN.rb"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: homebrew-formula
+          path: Formula/${{ env.BIN }}.rb
+          if-no-files-found: error
+
+      - name: Push to the tap
+        if: env.TAP_TOKEN != ''
+        run: |
+          set -euo pipefail
+          git clone --depth 1 "https://x-access-token:${TAP_TOKEN}@github.com/${TAP_REPO}.git" tap
+          mkdir -p tap/Formula
+          cp "Formula/$BIN.rb" "tap/Formula/$BIN.rb"
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "Formula/$BIN.rb"
+          if git diff --cached --quiet; then echo "formula unchanged"; exit 0; fi
+          git commit -m "$BIN $GITHUB_REF_NAME"
+          git push

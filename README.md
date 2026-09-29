@@ -28,6 +28,12 @@
 
 ## Install
 
+With [Homebrew](https://brew.sh):
+
+```sh
+brew install rawnly/tap/bracco
+```
+
 With [mise](https://mise.jdx.dev):
 
 ```sh
