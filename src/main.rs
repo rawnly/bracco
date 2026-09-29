@@ -1,6 +1,8 @@
+mod exec;
 mod filters;
 mod finder;
 mod icons;
+mod preview;
 mod tui;
 
 use std::io::Write;
@@ -16,7 +18,8 @@ use usage::Cli;
 /// Fuzzy file picker: git-modified files first, respects .gitignore.
 ///
 /// The interactive UI is drawn on /dev/tty; the selected path goes to stdout.
-/// Exit code: 0 selected, 1 cancelled / no match, 2 error.
+/// Exit code: 0 selected, 1 cancelled / no match, 2 error. With --exec, the
+/// command's own exit code.
 #[derive(Debug, Cli)]
 #[usage(bin = "fff-picker", version = env!("CARGO_PKG_VERSION"), unknown_flags = "error", completion)]
 struct Args {
@@ -45,7 +48,10 @@ struct Args {
     log_file: Option<PathBuf>,
 
     /// Only files with this git status: all, changed, staged, unstaged, untracked, clean
-    #[usage(long, choices("all", "changed", "staged", "unstaged", "untracked", "clean"))]
+    #[usage(
+        long,
+        choices("all", "changed", "staged", "unstaged", "untracked", "clean")
+    )]
     status: Option<String>,
 
     /// Shortcut for --status changed
@@ -59,6 +65,28 @@ struct Args {
     /// Exclude paths matching this glob (repeatable): `node_modules`, `*.lock`, `src/gen`
     #[usage(short = 'x', long)]
     exclude: Vec<String>,
+
+    /// Run this shell command when pressing enter, instead of printing the path.
+    /// `{}` = quoted relative path, `{abs}` = absolute path (else appended). e.g. -E 'nvim {}'
+    #[usage(short = 'E', long, env = "FFF_PICKER_EXEC", value_name = "CMD")]
+    exec: Option<String>,
+
+    /// Shortcut for --exec '$VISUAL / $EDITOR / vi'
+    #[usage(long)]
+    edit: bool,
+
+    /// With --exec / --edit: come back to the picker after the command exits
+    #[usage(long)]
+    keep_open: bool,
+
+    /// Show the output of this command for the highlighted file in a side pane.
+    /// Same placeholders as --exec. e.g. --preview 'bat --color=always {}'
+    #[usage(long, env = "FFF_PICKER_PREVIEW", value_name = "CMD")]
+    preview: Option<String>,
+
+    /// Preview pane placement: [right|left|up|down][:N%][:hidden]
+    #[usage(long, default = "right:50%", value_name = "SPEC")]
+    preview_window: String,
 
     /// Directory to search
     #[usage(default = ".", value_hint = usage::ValueHint::DirPath)]
@@ -117,10 +145,10 @@ fn generate(cmd: &Command) -> Result<()> {
     Ok(())
 }
 
-fn run(args: Args) -> Result<bool> {
+fn run(args: Args) -> Result<u8> {
     if let Some(cmd) = &args.command {
         generate(cmd)?;
-        return Ok(true);
+        return Ok(0);
     }
     init_logging(args.log_file.as_ref())?;
     debug!(?args, "starting");
@@ -135,6 +163,7 @@ fn run(args: Args) -> Result<bool> {
         (None, true) => StatusFilter::Changed,
         (None, false) => StatusFilter::All,
     };
+    let window = preview::Window::parse(&args.preview_window)?;
     let filters = Filters::new(status, &args.ext, &args.exclude);
     let sep: &[u8] = if args.print0 { b"\0" } else { b"\n" };
     // Relative output is relative to the caller's cwd, not to DIR.
@@ -142,7 +171,11 @@ fn run(args: Args) -> Result<bool> {
         if args.absolute {
             root.join(p).to_string_lossy().into_owned()
         } else {
-            args.dir.join(p).to_string_lossy().trim_start_matches("./").to_owned()
+            args.dir
+                .join(p)
+                .to_string_lossy()
+                .trim_start_matches("./")
+                .to_owned()
         }
     };
 
@@ -156,12 +189,12 @@ fn run(args: Args) -> Result<bool> {
         let entries = finder.search(query, &filters, args.limit).entries;
         for e in &entries {
             match write(&mut out, &e.path) {
-                Err(err) if err.kind() == std::io::ErrorKind::BrokenPipe => return Ok(true),
+                Err(err) if err.kind() == std::io::ErrorKind::BrokenPipe => return Ok(0),
                 r => r?,
             }
         }
         out.flush()?;
-        return Ok(!entries.is_empty());
+        return Ok(u8::from(entries.is_empty()));
     }
 
     let Ok(tty) = std::fs::OpenOptions::new()
@@ -172,16 +205,42 @@ fn run(args: Args) -> Result<bool> {
         bail!("no controlling terminal; use --list for non-interactive output");
     };
 
-    match tui::run(tty, &finder, query, filters)? {
-        Some(p) => {
+    let on_enter = match (args.exec.as_deref(), args.edit) {
+        (Some(t), _) => Some(t.to_owned()),
+        (None, true) => Some(r#"${VISUAL:-${EDITOR:-vi}} {}"#.to_owned()),
+        (None, false) => None,
+    }
+    .map(|template| exec::OnEnter {
+        template,
+        keep_open: args.keep_open,
+        root: root.clone(),
+        dir: args.dir.clone(),
+    });
+
+    let preview = match args.preview.as_deref() {
+        Some(cmd) => Some(preview::Preview::new(
+            exec::OnEnter {
+                template: cmd.to_owned(),
+                keep_open: false,
+                root: root.clone(),
+                dir: args.dir.clone(),
+            },
+            window,
+        )),
+        None => None,
+    };
+
+    match tui::run(tty, &finder, query, filters, on_enter.as_ref(), preview)? {
+        tui::Outcome::Selected(p) => {
             info!(path = %p, "selected");
             write(&mut out, &p)?;
             out.flush()?;
-            Ok(true)
+            Ok(0)
         }
-        None => {
+        tui::Outcome::Executed(code) => Ok(code.clamp(0, 255) as u8),
+        tui::Outcome::Cancelled => {
             info!("cancelled");
-            Ok(false)
+            Ok(1)
         }
     }
 }
@@ -190,8 +249,7 @@ fn main() -> ExitCode {
     // Handles --help / --version / usage errors itself.
     let args = Args::parse();
     match run(args) {
-        Ok(true) => ExitCode::SUCCESS,
-        Ok(false) => ExitCode::from(1),
+        Ok(code) => ExitCode::from(code),
         Err(e) => {
             tracing::error!(error = %e, "failed");
             eprintln!("fff-picker: {e}");

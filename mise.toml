@@ -1,0 +1,4 @@
+[tools]
+lefthook = "2.1.4"
+mr-boxington = "1.19.0"
+rust = "1.94.0"

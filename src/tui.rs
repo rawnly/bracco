@@ -1,10 +1,10 @@
 use std::io::Write;
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
-use crossterm::execute;
 use eyre::Result;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
@@ -13,9 +13,11 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 
-use crate::icons::icon_for;
+use crate::exec::{self, OnEnter};
 use crate::filters::{Filters, StatusFilter};
 use crate::finder::{Entry, Finder, GitState};
+use crate::icons::icon_for;
+use crate::preview::{Position, Preview};
 
 const LIMIT: usize = 2000;
 
@@ -30,14 +32,24 @@ impl Drop for TermGuard {
     }
 }
 
+pub enum Outcome {
+    Cancelled,
+    /// Enter pressed, no on-enter action configured: the chosen path.
+    Selected(String),
+    /// The on-enter command ran (and we exit): its exit code.
+    Executed(i32),
+}
+
 /// Run the interactive picker on the given tty so stdout stays clean for the
-/// selected path. Returns `None` if cancelled.
+/// selected path.
 pub fn run(
     tty: std::fs::File,
     finder: &Finder,
     initial_query: &str,
     filters: Filters,
-) -> Result<Option<String>> {
+    on_enter: Option<&OnEnter>,
+    preview: Option<Preview>,
+) -> Result<Outcome> {
     enable_raw_mode()?;
     let mut out = tty.try_clone()?;
     let _guard = TermGuard(tty.try_clone()?);
@@ -52,16 +64,19 @@ pub fn run(
         prev(info);
     }));
 
-    let mut terminal = Terminal::new(CrosstermBackend::new(tty))?;
-    event_loop(&mut terminal, finder, initial_query, filters)
+    let mut terminal = Terminal::new(CrosstermBackend::new(tty.try_clone()?))?;
+    event_loop(&mut terminal, &tty, finder, initial_query, filters, on_enter, preview)
 }
 
 fn event_loop(
     terminal: &mut Terminal<CrosstermBackend<std::fs::File>>,
+    tty: &std::fs::File,
     finder: &Finder,
     initial_query: &str,
     mut filters: Filters,
-) -> Result<Option<String>> {
+    on_enter: Option<&OnEnter>,
+    mut preview: Option<Preview>,
+) -> Result<Outcome> {
     let mut show_help = false;
     let mut help_scroll: u16 = 0;
     let mut query = initial_query.to_string();
@@ -71,13 +86,25 @@ fn event_loop(
     let mut state = ListState::default().with_selected(Some(0));
 
     loop {
+        // Keep the preview in sync with the highlighted file and pane size.
+        if let Some(pv) = preview.as_mut().filter(|p| p.visible) {
+            let [_, list, _] = main_areas(terminal.size()?.into());
+            let inner = pv.window.split(list).1.map(|r| pane_block(pv.window.position).inner(r));
+            match inner {
+                Some(r) => {
+                    let sel = entries.get(state.selected().unwrap_or(0)).map(|e| e.path.as_str());
+                    pv.request(sel, r.width, r.height);
+                }
+                None => pv.request(None, 0, 0),
+            }
+        }
+
         terminal.draw(|f| {
-            let [input, list, status] = Layout::vertical([
-                Constraint::Length(1),
-                Constraint::Min(1),
-                Constraint::Length(1),
-            ])
-            .areas(f.area());
+            let [input, list_full, status] = main_areas(f.area());
+            let (list, preview_area) = match preview.as_ref().filter(|p| p.visible && !show_help) {
+                Some(pv) => pv.window.split(list_full),
+                None => (list_full, None),
+            };
 
             // Input row: prompt + query on the left, active filters right-aligned.
             const MIN_INPUT: u16 = 12;
@@ -86,7 +113,10 @@ fn event_loop(
             let [text_area, chips_area] =
                 Layout::horizontal([Constraint::Min(1), Constraint::Length(chips_w)]).areas(input);
 
-            let prompt = Span::styled("❯ ", Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD));
+            let prompt = Span::styled(
+                "❯ ",
+                Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            );
             let text = if query.is_empty() {
                 Line::from(vec![
                     prompt,
@@ -96,7 +126,10 @@ fn event_loop(
                 Line::from(vec![prompt, Span::raw(query.as_str())])
             };
             f.render_widget(Paragraph::new(text), text_area);
-            f.render_widget(Paragraph::new(chips).alignment(Alignment::Right), chips_area);
+            f.render_widget(
+                Paragraph::new(chips).alignment(Alignment::Right),
+                chips_area,
+            );
 
             f.set_cursor_position((
                 (text_area.x + 2 + Line::raw(query.as_str()).width() as u16)
@@ -110,7 +143,11 @@ fn event_loop(
                     let st = e.state;
                     let path_color = path_color(st);
                     let (icon, icon_color) = icon_for(&e.path);
-                    let icon_color = if path_color == Color::Reset { icon_color } else { path_color };
+                    let icon_color = if path_color == Color::Reset {
+                        icon_color
+                    } else {
+                        path_color
+                    };
                     ListItem::new(Line::from(vec![
                         Span::styled(st.x.to_string(), Style::new().fg(index_color(st))),
                         Span::styled(st.y.to_string(), Style::new().fg(worktree_color(st))),
@@ -120,10 +157,27 @@ fn event_loop(
                     ]))
                 })
                 .collect();
+            if let (Some(pv), Some(area)) = (preview.as_ref(), preview_area) {
+                let block = pane_block(pv.window.position);
+                let inner = block.inner(area);
+                f.render_widget(block, area);
+                if pv.lines.is_empty() && pv.loading {
+                    f.render_widget(
+                        Paragraph::new(Span::styled("loading…", Style::new().fg(Color::DarkGray))),
+                        inner,
+                    );
+                } else {
+                    f.render_widget(Paragraph::new(pv.lines.clone()).scroll((pv.scroll, 0)), inner);
+                }
+            }
+
             if show_help {
                 let lines = help_lines(&filters, &query);
-                let max = (lines.len() as u16).saturating_sub(list.height);
-                f.render_widget(Paragraph::new(lines).scroll((help_scroll.min(max), 0)), list);
+                let max = (lines.len() as u16).saturating_sub(list_full.height);
+                f.render_widget(
+                    Paragraph::new(lines).scroll((help_scroll.min(max), 0)),
+                    list,
+                );
             } else {
                 f.render_stateful_widget(
                     List::new(items)
@@ -141,7 +195,7 @@ fn event_loop(
                     "esc / q / ? close  ·  ↑↓ PgUp PgDn scroll".to_string()
                 } else {
                     format!(
-                        "{}/{} files  ·  tab filter · ^g ^s ^u · ? help",
+                        "{}/{} files  ·  tab filter · ^g ^s ^a · ? help",
                         entries.len(),
                         total
                     )
@@ -151,9 +205,20 @@ fn event_loop(
             );
         })?;
 
-        let Event::Key(key) = event::read()? else {
-            continue;
+        // Wait for a key, or redraw when a preview finishes / on resize.
+        let key = loop {
+            if preview.as_mut().is_some_and(|p| p.poll()) {
+                break None;
+            }
+            if event::poll(std::time::Duration::from_millis(30))? {
+                match event::read()? {
+                    Event::Key(k) => break Some(k),
+                    Event::Resize(..) => break None,
+                    _ => {}
+                }
+            }
         };
+        let Some(key) = key else { continue };
         if key.kind == KeyEventKind::Release {
             continue;
         }
@@ -165,11 +230,15 @@ fn event_loop(
         if show_help {
             let page = terminal.size()?.height.saturating_sub(2);
             match key.code {
-                KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?') | KeyCode::F(1) | KeyCode::Enter => {
+                KeyCode::Esc
+                | KeyCode::Char('q')
+                | KeyCode::Char('?')
+                | KeyCode::F(1)
+                | KeyCode::Enter => {
                     show_help = false;
                     help_scroll = 0;
                 }
-                KeyCode::Char('c') if ctrl => return Ok(None),
+                KeyCode::Char('c') if ctrl => return Ok(Outcome::Cancelled),
                 KeyCode::Up | KeyCode::Char('k') => help_scroll = help_scroll.saturating_sub(1),
                 KeyCode::Down | KeyCode::Char('j') => help_scroll = help_scroll.saturating_add(1),
                 KeyCode::PageUp => help_scroll = help_scroll.saturating_sub(page),
@@ -180,9 +249,46 @@ fn event_loop(
             continue;
         }
 
+        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+
         match key.code {
-            KeyCode::Esc => return Ok(None),
-            KeyCode::Char('c') if ctrl => return Ok(None),
+            KeyCode::Esc => return Ok(Outcome::Cancelled),
+            KeyCode::Char('o') if ctrl => {
+                if let Some(pv) = preview.as_mut() {
+                    pv.toggle();
+                }
+            }
+            KeyCode::Char('d') if ctrl => {
+                if let Some(pv) = preview.as_mut() {
+                    pv.scroll_by(pv.page() / 2);
+                }
+            }
+            KeyCode::Char('u') if ctrl => {
+                if let Some(pv) = preview.as_mut() {
+                    pv.scroll_by(-(pv.page() / 2));
+                }
+            }
+            KeyCode::Up if shift => {
+                if let Some(pv) = preview.as_mut() {
+                    pv.scroll_by(-1);
+                }
+            }
+            KeyCode::Down if shift => {
+                if let Some(pv) = preview.as_mut() {
+                    pv.scroll_by(1);
+                }
+            }
+            KeyCode::PageUp if shift => {
+                if let Some(pv) = preview.as_mut() {
+                    pv.scroll_by(-pv.page());
+                }
+            }
+            KeyCode::PageDown if shift => {
+                if let Some(pv) = preview.as_mut() {
+                    pv.scroll_by(pv.page());
+                }
+            }
+            KeyCode::Char('c') if ctrl => return Ok(Outcome::Cancelled),
             KeyCode::F(1) => show_help = true,
             KeyCode::Char('?') if query.is_empty() => show_help = true,
             KeyCode::Tab => {
@@ -204,7 +310,7 @@ fn event_loop(
                 filters.status = filters.status.toggle(StatusFilter::Staged);
                 changed = true;
             }
-            KeyCode::Char('u') if ctrl => {
+            KeyCode::Char('a') if ctrl => {
                 filters.status = filters.status.toggle(StatusFilter::Unstaged);
                 changed = true;
             }
@@ -214,7 +320,26 @@ fn event_loop(
             }
             KeyCode::Enter => {
                 if let Some(e) = entries.get(sel) {
-                    return Ok(Some(e.path.clone()));
+                    let Some(oe) = on_enter else {
+                        return Ok(Outcome::Selected(e.path.clone()));
+                    };
+                    // Hand the terminal to the command (editor, pager, ...).
+                    let cmd = oe.command(&e.path);
+                    tracing::info!(%cmd, "on-enter");
+                    let mut out = tty.try_clone()?;
+                    disable_raw_mode()?;
+                    execute!(out, LeaveAlternateScreen)?;
+                    let code = exec::run(&cmd, tty);
+                    enable_raw_mode()?;
+                    execute!(out, EnterAlternateScreen)?;
+                    // Fresh terminal = full redraw (Terminal::clear would query the
+                    // cursor position and wait for the emulator's reply).
+                    *terminal = Terminal::new(CrosstermBackend::new(tty.try_clone()?))?;
+                    let code = code?;
+                    tracing::info!(code, "on-enter finished");
+                    if !oe.keep_open {
+                        return Ok(Outcome::Executed(code));
+                    }
                 }
             }
             KeyCode::Up => state.select(Some(sel.saturating_sub(1))),
@@ -254,10 +379,13 @@ fn event_loop(
     }
 }
 
-
 // lazygit conventions: staged marker = green, unstaged / untracked marker = red.
 fn index_color(st: GitState) -> Color {
-    if st.is_conflicted() { Color::Red } else { Color::Green }
+    if st.is_conflicted() {
+        Color::Red
+    } else {
+        Color::Green
+    }
 }
 
 fn worktree_color(_st: GitState) -> Color {
@@ -290,16 +418,28 @@ const HELP_SECTIONS: &[(&str, &[(&str, &str)])] = &[
         ],
     ),
     (
+        "Preview (with --preview)",
+        &[
+            ("^o", "show / hide the preview pane"),
+            ("^d  ^u", "scroll the preview half a page down / up"),
+            ("shift-↑ ↓", "scroll the preview by line"),
+            ("shift-PgUp PgDn", "scroll the preview by page"),
+        ],
+    ),
+    (
         "Edit query",
         &[("^w", "delete last word"), ("^x", "clear the query")],
     ),
     (
         "Git filter",
         &[
-            ("tab  shift-tab", "cycle all → changed → staged → unstaged → untracked"),
+            (
+                "tab  shift-tab",
+                "cycle all → changed → staged → unstaged → untracked",
+            ),
             ("^g", "changed: anything git reports"),
             ("^s", "staged: has changes in the index"),
-            ("^u", "unstaged: modified in the worktree"),
+            ("^a", "unstaged: modified in the worktree"),
             ("^t", "untracked: new files"),
         ],
     ),
@@ -311,7 +451,10 @@ const HELP_SECTIONS: &[(&str, &[(&str, &str)])] = &[
             ("/src/", "only inside this directory"),
             ("!test", "exclude matches"),
             ("type:rust", "by file type"),
-            ("status:modified", "also staged, untracked, unmodified (st: g: git:)"),
+            (
+                "status:modified",
+                "also staged, untracked, unmodified (st: g: git:)",
+            ),
         ],
     ),
 ];
@@ -339,12 +482,21 @@ fn help_lines(filters: &Filters, query: &str) -> Vec<Line<'static>> {
     // Live state, so the help also answers "why am I seeing this list?".
     out.push(Line::raw(""));
     out.push(Line::from(Span::styled(" Active now", head)));
-    let mut now = vec![Span::styled(format!("   status: {}", filters.status.label()), dim)];
+    let mut now = vec![Span::styled(
+        format!("   status: {}", filters.status.label()),
+        dim,
+    )];
     if !filters.exts.is_empty() {
-        now.push(Span::styled(format!("   ext: {}", filters.exts.join(", ")), dim));
+        now.push(Span::styled(
+            format!("   ext: {}", filters.exts.join(", ")),
+            dim,
+        ));
     }
     if !filters.exclude.is_empty() {
-        now.push(Span::styled(format!("   exclude: {}", filters.exclude.join(", ")), dim));
+        now.push(Span::styled(
+            format!("   exclude: {}", filters.exclude.join(", ")),
+            dim,
+        ));
     }
     if !query.is_empty() {
         now.push(Span::styled(format!("   query: {query}"), dim));
@@ -357,7 +509,10 @@ fn help_lines(filters: &Filters, query: &str) -> Vec<Line<'static>> {
 /// Chips are dropped from the end (excludes first) until they fit `max_width`.
 fn filter_chips(filters: &Filters, max_width: u16) -> Line<'static> {
     let chip = |text: String, color: Color| {
-        Span::styled(format!(" {text} "), Style::new().fg(color).add_modifier(Modifier::BOLD))
+        Span::styled(
+            format!(" {text} "),
+            Style::new().fg(color).add_modifier(Modifier::BOLD),
+        )
     };
     let mut chips: Vec<Span<'static>> = Vec::new();
     if filters.status != StatusFilter::All {
@@ -404,4 +559,25 @@ mod tests {
         assert_eq!(text(&filter_chips(&f, 3)), "");
         assert_eq!(filter_chips(&Filters::default(), 80).width(), 0);
     }
+}
+
+fn main_areas(area: ratatui::layout::Rect) -> [ratatui::layout::Rect; 3] {
+    Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Min(1),
+        Constraint::Length(1),
+    ])
+    .areas(area)
+}
+
+/// Thin separator on the side that faces the list.
+fn pane_block(pos: Position) -> ratatui::widgets::Block<'static> {
+    use ratatui::widgets::{Block, Borders};
+    let side = match pos {
+        Position::Right => Borders::LEFT,
+        Position::Left => Borders::RIGHT,
+        Position::Down => Borders::TOP,
+        Position::Up => Borders::BOTTOM,
+    };
+    Block::new().borders(side).border_style(Style::new().fg(Color::DarkGray))
 }

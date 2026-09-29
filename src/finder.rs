@@ -24,7 +24,10 @@ impl GitState {
         self == Self::CLEAN
     }
     pub fn is_conflicted(self) -> bool {
-        self.x == 'U' || self.y == 'U' || (self.x == 'A' && self.y == 'A') || (self.x == 'D' && self.y == 'D')
+        self.x == 'U'
+            || self.y == 'U'
+            || (self.x == 'A' && self.y == 'A')
+            || (self.x == 'D' && self.y == 'D')
     }
     pub fn is_untracked(self) -> bool {
         self.x == '?'
@@ -129,28 +132,34 @@ impl Finder {
             _ => None,
         };
 
-        let mut candidates: Vec<&fff_search::FileItem> = if short_needle.is_some()
-            && parsed.constraints.is_empty()
-        {
-            // get_files() is already sorted by path.
-            picker.get_files().iter().filter(|f| !f.is_deleted()).collect()
-        } else {
-            let res = picker.fuzzy_search(
-                &parsed,
-                None,
-                FuzzySearchOptions {
-                    max_threads: 0,
-                    // limit 0 == all matches
-                    pagination: PaginationArgs { offset: 0, limit: 0 },
-                    ..Default::default()
-                },
-            );
-            let mut items = res.items;
-            if short_needle.is_some() {
-                items.sort_by_cached_key(|f| f.relative_path(picker));
-            }
-            items
-        };
+        let mut candidates: Vec<&fff_search::FileItem> =
+            if short_needle.is_some() && parsed.constraints.is_empty() {
+                // get_files() is already sorted by path.
+                picker
+                    .get_files()
+                    .iter()
+                    .filter(|f| !f.is_deleted())
+                    .collect()
+            } else {
+                let res = picker.fuzzy_search(
+                    &parsed,
+                    None,
+                    FuzzySearchOptions {
+                        max_threads: 0,
+                        // limit 0 == all matches
+                        pagination: PaginationArgs {
+                            offset: 0,
+                            limit: 0,
+                        },
+                        ..Default::default()
+                    },
+                );
+                let mut items = res.items;
+                if short_needle.is_some() {
+                    items.sort_by_cached_key(|f| f.relative_path(picker));
+                }
+                items
+            };
 
         if let Some(needle) = short_needle.as_deref().filter(|n| !n.is_empty()) {
             candidates.retain(|f| f.relative_path(picker).to_lowercase().contains(needle));
@@ -166,7 +175,11 @@ impl Finder {
             if filters.has_path_filters() && !filters.path_ok(&f.relative_path(picker)) {
                 continue;
             }
-            if st.is_clean() { clean.push((f, st)) } else { changed.push((f, st)) }
+            if st.is_clean() {
+                clean.push((f, st))
+            } else {
+                changed.push((f, st))
+            }
         }
 
         // Stable partition: relevance / alphabetical order kept within groups.
@@ -256,8 +269,14 @@ mod tests {
         let d = repo();
         let f = Finder::open(&d.path().canonicalize().unwrap()).unwrap();
         let only = |st| Filters::new(st, &[], &[]);
-        assert_eq!(paths(&f.search("", &only(StatusFilter::Untracked), 100)), ["new.txt"]);
-        assert_eq!(paths(&f.search("", &only(StatusFilter::Unstaged), 100)), ["c.toml"]);
+        assert_eq!(
+            paths(&f.search("", &only(StatusFilter::Untracked), 100)),
+            ["new.txt"]
+        );
+        assert_eq!(
+            paths(&f.search("", &only(StatusFilter::Unstaged), 100)),
+            ["c.toml"]
+        );
         let ext = Filters::new(StatusFilter::All, &["md".into()], &[]);
         assert_eq!(paths(&f.search("", &ext, 100)), ["b.md"]);
         let ex = Filters::new(StatusFilter::All, &[], &["*.rs".into()]);

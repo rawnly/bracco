@@ -83,7 +83,12 @@ impl Filters {
             exts: exts
                 .iter()
                 .flat_map(|e| e.split(','))
-                .map(|e| e.trim().trim_start_matches("*.").trim_start_matches('.').to_lowercase())
+                .map(|e| {
+                    e.trim()
+                        .trim_start_matches("*.")
+                        .trim_start_matches('.')
+                        .to_lowercase()
+                })
                 .filter(|e| !e.is_empty())
                 .collect(),
             exclude: exclude.iter().filter(|e| !e.is_empty()).cloned().collect(),
@@ -163,7 +168,11 @@ mod tests {
 
     #[test]
     fn excludes() {
-        let f = Filters::new(StatusFilter::All, &[], &["node_modules".into(), "*.lock".into(), "src/gen".into()]);
+        let f = Filters::new(
+            StatusFilter::All,
+            &[],
+            &["node_modules".into(), "*.lock".into(), "src/gen".into()],
+        );
         assert!(!f.path_ok("a/node_modules/x.js"));
         assert!(!f.path_ok("sub/Cargo.lock"));
         assert!(!f.path_ok("src/gen/x.rs"));
@@ -186,6 +195,9 @@ mod tests {
         assert!(StatusFilter::Unstaged.matches(both) && !StatusFilter::Unstaged.matches(untracked));
         assert!(StatusFilter::Untracked.matches(untracked));
         assert!(StatusFilter::Clean.matches(GitState::CLEAN));
-        assert_eq!(StatusFilter::Changed.toggle(StatusFilter::Changed), StatusFilter::All);
+        assert_eq!(
+            StatusFilter::Changed.toggle(StatusFilter::Changed),
+            StatusFilter::All
+        );
     }
 }
