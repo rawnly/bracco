@@ -95,6 +95,8 @@ fn event_loop(
     let mut show_help = false;
     let mut help_scroll: u16 = 0;
     let mut query = initial_query.to_string();
+    // Byte offset of the text cursor in `query` (always on a char boundary).
+    let mut cursor = query.len();
     let mut res = finder.search(&query, &filters, LIMIT);
     let mut entries: Vec<Entry> = std::mem::take(&mut res.entries);
     let mut total = res.total;
@@ -161,7 +163,7 @@ fn event_loop(
 
             if insert {
                 f.set_cursor_position((
-                    (text_area.x + 2 + Line::raw(query.as_str()).width() as u16)
+                    (text_area.x + 2 + Line::raw(&query[..cursor]).width() as u16)
                         .min(text_area.right().saturating_sub(1)),
                     text_area.y,
                 ));
@@ -458,19 +460,36 @@ fn event_loop(
             }
             KeyCode::PageUp => state.select(Some(sel.saturating_sub(10))),
             KeyCode::PageDown => state.select(Some((sel + 10).min(last))),
-            KeyCode::Backspace => changed = query.pop().is_some(),
+            KeyCode::Left => cursor = prev_boundary(&query, cursor),
+            KeyCode::Right => cursor = next_boundary(&query, cursor),
+            KeyCode::Home => cursor = 0,
+            KeyCode::End => cursor = query.len(),
+            KeyCode::Backspace => {
+                let start = prev_boundary(&query, cursor);
+                changed = start != cursor;
+                query.replace_range(start..cursor, "");
+                cursor = start;
+            }
+            KeyCode::Delete => {
+                let end = next_boundary(&query, cursor);
+                changed = end != cursor;
+                query.replace_range(cursor..end, "");
+            }
             KeyCode::Char('x') if ctrl => {
                 changed = !query.is_empty();
                 query.clear();
+                cursor = 0;
             }
             KeyCode::Char('w') if ctrl => {
-                let t = query.trim_end().len();
+                let t = query[..cursor].trim_end().len();
                 let cut = query[..t].rfind(' ').map(|i| i + 1).unwrap_or(0);
-                query.truncate(cut);
-                changed = true;
+                changed = cut != cursor;
+                query.replace_range(cut..cursor, "");
+                cursor = cut;
             }
             KeyCode::Char(c) if !ctrl => {
-                query.push(c);
+                query.insert(cursor, c);
+                cursor += c.len_utf8();
                 changed = true;
             }
             _ => {}
@@ -483,6 +502,14 @@ fn event_loop(
             state.select(Some(0));
         }
     }
+}
+
+fn prev_boundary(s: &str, at: usize) -> usize {
+    s[..at].char_indices().next_back().map_or(0, |(i, _)| i)
+}
+
+fn next_boundary(s: &str, at: usize) -> usize {
+    s[at..].chars().next().map_or(at, |c| at + c.len_utf8())
 }
 
 // lazygit conventions: staged marker = green, unstaged / untracked marker = red.
@@ -545,7 +572,12 @@ const HELP_SECTIONS: &[(&str, &[(&str, &str)])] = &[
     ),
     (
         "Edit query",
-        &[("^w", "delete last word"), ("^x", "clear the query")],
+        &[
+            ("← →  home end", "move the cursor"),
+            ("backspace  del", "delete before / after the cursor"),
+            ("^w", "delete the word before the cursor"),
+            ("^x", "clear the query"),
+        ],
     ),
     (
         "Git filter",
@@ -687,6 +719,18 @@ mod tests {
 
     fn text(l: &Line) -> String {
         l.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn cursor_boundaries_handle_multibyte() {
+        let s = "aé日";
+        assert_eq!(next_boundary(s, 0), 1);
+        assert_eq!(next_boundary(s, 1), 3);
+        assert_eq!(next_boundary(s, 3), s.len());
+        assert_eq!(next_boundary(s, s.len()), s.len());
+        assert_eq!(prev_boundary(s, s.len()), 3);
+        assert_eq!(prev_boundary(s, 3), 1);
+        assert_eq!(prev_boundary(s, 0), 0);
     }
 
     #[test]
