@@ -101,6 +101,10 @@ fn event_loop(
     let mut entries: Vec<Entry> = std::mem::take(&mut res.entries);
     let mut total = res.total;
     let mut state = ListState::default().with_selected(Some(0));
+    // Git statuses are applied by a background worker after the file list
+    // becomes searchable; watch for them briefly and re-run the search.
+    let mut known_changed = finder.changed_count();
+    let mut status_deadline = Some(std::time::Instant::now() + std::time::Duration::from_secs(3));
 
     loop {
         // Keep the preview in sync with the highlighted file and pane size.
@@ -256,6 +260,27 @@ fn event_loop(
         let key = loop {
             if preview.as_mut().is_some_and(|p| p.poll()) {
                 break None;
+            }
+            if let Some(deadline) = status_deadline {
+                let now = finder.changed_count();
+                if now != known_changed {
+                    known_changed = now;
+                    let keep = entries
+                        .get(state.selected().unwrap_or(0))
+                        .map(|e| e.path.clone());
+                    let r = finder.search(&query, &filters, LIMIT);
+                    total = r.total;
+                    entries = r.entries;
+                    let idx = keep.and_then(|k| entries.iter().position(|x| x.path == k));
+                    state.select(Some(idx.unwrap_or(0)));
+                    if let Some(pv) = preview.as_mut() {
+                        pv.invalidate();
+                    }
+                    status_deadline = None;
+                    break None;
+                } else if std::time::Instant::now() > deadline {
+                    status_deadline = None;
+                }
             }
             if event::poll(std::time::Duration::from_millis(30))? {
                 match event::read()? {

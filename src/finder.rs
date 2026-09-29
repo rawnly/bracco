@@ -3,7 +3,7 @@ use std::path::Path;
 use eyre::{Result, eyre};
 use fff_search::{
     FFFMode, FilePicker, FilePickerOptions, FuzzyQuery, FuzzySearchOptions, PaginationArgs,
-    QueryParser,
+    QueryParser, SharedFilePicker, SharedFrecency,
 };
 
 use crate::filters::Filters;
@@ -90,8 +90,26 @@ pub struct SearchResult {
     pub total: usize,
 }
 
+/// Where the index lives. `Sync` blocks until git statuses are applied (right
+/// for `--list`, whose output order depends on them). `Shared` is indexed by a
+/// background job: files are searchable as soon as the walk ends and git
+/// statuses land a bit later (right for the TUI, which can redraw).
+enum Backend {
+    Sync(Box<FilePicker>),
+    Shared(SharedFilePicker, SharedFrecency),
+}
+
 pub struct Finder {
-    picker: FilePicker,
+    backend: Backend,
+}
+
+fn options(root: &Path) -> FilePickerOptions {
+    FilePickerOptions {
+        base_path: root.to_string_lossy().into_owned(),
+        mode: FFFMode::Neovim,
+        watch: false,
+        ..Default::default()
+    }
 }
 
 impl Finder {
@@ -99,13 +117,8 @@ impl Finder {
     /// applied before this returns.
     #[instrument(skip_all, fields(root = %root.display()))]
     pub fn open(root: &Path) -> Result<Self> {
-        let mut picker = FilePicker::new(FilePickerOptions {
-            base_path: root.to_string_lossy().into_owned(),
-            mode: FFFMode::Neovim,
-            watch: false,
-            ..Default::default()
-        })
-        .map_err(|e| eyre!("cannot index {}: {e}", root.display()))?;
+        let mut picker = FilePicker::new(options(root))
+            .map_err(|e| eyre!("cannot index {}: {e}", root.display()))?;
 
         let t = std::time::Instant::now();
         picker
@@ -113,7 +126,47 @@ impl Finder {
             .map_err(|e| eyre!("cannot scan {}: {e}", root.display()))?;
         info!(files = picker.get_files().len(), elapsed = ?t.elapsed(), "scan finished");
 
-        Ok(Self { picker })
+        Ok(Self {
+            backend: Backend::Sync(Box::new(picker)),
+        })
+    }
+
+    /// Like [`Finder::open`], but returns as soon as the file list is
+    /// searchable. Git statuses are applied by a background worker shortly
+    /// after; poll [`Finder::changed_count`] to notice.
+    #[instrument(skip_all, fields(root = %root.display()))]
+    pub fn open_async(root: &Path) -> Result<Self> {
+        let shared = SharedFilePicker::default();
+        let frecency = SharedFrecency::default();
+        let t = std::time::Instant::now();
+        FilePicker::new_with_shared_state(shared.clone(), frecency.clone(), options(root))
+            .map_err(|e| eyre!("cannot index {}: {e}", root.display()))?;
+        shared.wait_for_scan(std::time::Duration::from_secs(60));
+        info!(elapsed = ?t.elapsed(), "files searchable");
+        Ok(Self {
+            backend: Backend::Shared(shared, frecency),
+        })
+    }
+
+    /// Number of files with a non-clean git status. Cheap (one pass over the
+    /// index); changes when the background status worker finishes.
+    pub fn changed_count(&self) -> usize {
+        self.with_picker(|p| {
+            p.get_files()
+                .iter()
+                .filter(|f| f.git_status.is_some_and(|s| !s.is_empty()))
+                .count()
+        })
+    }
+
+    fn with_picker<R>(&self, f: impl FnOnce(&FilePicker) -> R) -> R {
+        match &self.backend {
+            Backend::Sync(p) => f(p),
+            Backend::Shared(shared, _) => {
+                let guard = shared.read().expect("picker lock");
+                f(guard.as_ref().expect("picker present"))
+            }
+        }
     }
 
     /// Re-scan the tree and re-read git status (files may have changed while
@@ -121,10 +174,18 @@ impl Finder {
     #[instrument(skip_all)]
     pub fn refresh(&mut self) -> Result<()> {
         let t = std::time::Instant::now();
-        self.picker
-            .collect_files()
-            .map_err(|e| eyre!("cannot rescan: {e}"))?;
-        info!(files = self.picker.get_files().len(), elapsed = ?t.elapsed(), "rescan finished");
+        match &mut self.backend {
+            Backend::Sync(p) => {
+                p.collect_files().map_err(|e| eyre!("cannot rescan: {e}"))?;
+            }
+            Backend::Shared(shared, frecency) => {
+                shared
+                    .trigger_full_rescan_async(frecency)
+                    .map_err(|e| eyre!("cannot rescan: {e}"))?;
+                shared.wait_for_scan(std::time::Duration::from_secs(60));
+            }
+        }
+        info!(elapsed = ?t.elapsed(), "rescan finished");
         Ok(())
     }
 
@@ -133,7 +194,12 @@ impl Finder {
     /// is truncated to `limit`.
     #[instrument(skip(self))]
     pub fn search(&self, query: &str, filters: &Filters, limit: usize) -> SearchResult {
-        let picker = &self.picker;
+        self.with_picker(|picker| search_in(picker, query, filters, limit))
+    }
+}
+
+fn search_in(picker: &FilePicker, query: &str, filters: &Filters, limit: usize) -> SearchResult {
+    {
         let parsed = QueryParser::default().parse(query);
 
         // fff only fuzzy-matches text of 2+ bytes. For 0/1 char text we list

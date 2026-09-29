@@ -177,7 +177,13 @@ fn run(args: Args) -> Result<u8> {
     debug!(?args, "starting");
 
     let root = std::fs::canonicalize(&args.dir)?;
-    let mut finder = finder::Finder::open(&root)?;
+    // --list output order depends on git statuses, so wait for them; the TUI
+    // opens as soon as files are searchable and picks statuses up as they land.
+    let mut finder = if args.list {
+        finder::Finder::open(&root)?
+    } else {
+        finder::Finder::open_async(&root)?
+    };
     let query = args.query.as_deref().unwrap_or("");
     let status = match (args.status.as_deref(), args.changed) {
         (Some(s), _) => StatusFilter::parse(s).ok_or_else(|| {
