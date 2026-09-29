@@ -80,6 +80,20 @@ Shell completions can also be printed directly:
 fff-picker completions zsh > ~/.zfunc/_fff-picker   # bash, zsh, fish, elvish, nu, powershell
 ```
 
+## Herdr plugin
+
+`herdr-plugin.toml` adds a `pick` action that opens a popup with the picker and
+then opens the chosen file in your editor (`$FFF_PICKER_EDITOR`, `$VISUAL`,
+`$EDITOR`, else `vi`) in an overlay pane.
+
+```sh
+herdr plugin link .                # or: herdr plugin install rawnly/fff-picker
+herdr plugin action invoke pick --plugin dev.rawnly.fff-picker
+```
+
+Requires `fff-picker` (and optionally `jq`) in `PATH`; bind the action to a key
+in your herdr config.
+
 ## Development
 
 ```sh

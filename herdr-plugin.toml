@@ -1,0 +1,30 @@
+id = "dev.rawnly.fff-picker"
+name = "fff-picker"
+version = "0.1.0"
+min_herdr_version = "0.9.1"
+platforms = ["macos", "linux"]
+description = "Fuzzy file picker modal: choose a file and open it in your editor."
+
+# Bind this action to a key / run it from the palette.
+[[actions]]
+id = "pick"
+title = "fff-picker: open file"
+contexts = ["pane", "workspace"]
+command = ["plugin/fff-pick.sh", "launch"]
+
+# Popup modal running the fuzzy picker. Opened by the `pick` action.
+[[panes]]
+id = "picker"
+title = "open file"
+placement = "popup"
+width = "70%"
+height = "70%"
+command = ["plugin/fff-pick.sh", "picker"]
+
+# Overlay running the editor on the chosen file ($FFF_PICKER_FILE).
+# Closes when the editor exits.
+[[panes]]
+id = "editor"
+title = "editor"
+placement = "overlay"
+command = ["plugin/fff-pick.sh", "edit"]
