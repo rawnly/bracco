@@ -1,6 +1,6 @@
 [package]
 name = "bracco"
-version = "0.2.3"
+version = "0.2.4"
 edition = "2024"
 description = "Fast fuzzy file picker: git-modified files first, respects .gitignore"
 readme = "README.md"
