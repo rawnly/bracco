@@ -265,14 +265,10 @@ fn event_loop(
                 let now = finder.changed_count();
                 if now != known_changed {
                     known_changed = now;
-                    let keep = entries
-                        .get(state.selected().unwrap_or(0))
-                        .map(|e| e.path.clone());
                     let r = finder.search(&query, &filters, LIMIT);
                     total = r.total;
                     entries = r.entries;
-                    let idx = keep.and_then(|k| entries.iter().position(|x| x.path == k));
-                    state.select(Some(idx.unwrap_or(0)));
+                    state = ListState::default().with_selected(Some(0));
                     if let Some(pv) = preview.as_mut() {
                         pv.invalidate();
                     }
