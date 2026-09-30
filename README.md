@@ -199,6 +199,14 @@ herdr plugin action invoke pick --plugin dev.rawnly.bracco
 Requires `bracco` (and optionally `jq`) in `PATH`; bind the action to a key in
 your herdr config.
 
+```toml
+[[keys.command]]
+key = "prefix+i"
+type = "plugin_action"
+command = "dev.rawnly.bracco.pick"
+description = "Pick file"
+```
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and the release process.
