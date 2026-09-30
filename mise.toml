@@ -1,5 +1,5 @@
 [tools]
-lefthook = "2.1.4"
+lefthook = { version = "2.1.4", postinstall = "lefthook install" }
 mr-boxington = "1.19.0"
 rust = "1.94.0"
 gh = "latest"
