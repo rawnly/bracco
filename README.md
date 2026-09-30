@@ -24,6 +24,10 @@
 - **Composable**: UI on `/dev/tty`, result on stdout. Works with `$EDITOR "$(bracco)"`, pipes and `--list`.
 - **[Herdr](https://herdr.dev) plugin** included.
 
+<p align="center">
+  <img src="assets/bracco-showcase.gif" alt="bracco-showcase" >
+</p>
+
 ## Install
 
 With [Homebrew](https://brew.sh):
