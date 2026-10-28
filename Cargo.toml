@@ -16,6 +16,7 @@ exclude = [
   ".pi/",
   "assets/",
   "lefthook.yml",
+  "rex/",
   "skills-lock.json",
 ]
 
