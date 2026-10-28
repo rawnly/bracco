@@ -5,25 +5,41 @@ local M = {}
 local TERM = "com.superlogical.terminal"
 local SHELL = TERM .. ".shell"
 
--- Runs inside the float. $1 bracco, $2 editor (may be empty), $3 client id (may be empty), rest are bracco args.
+-- Runs inside the float. $1 bracco, $2 editor (may be empty), $3 app client id (may be empty), rest are bracco args.
 -- UI is drawn on /dev/tty, so the pick comes back on stdout.
 local SCRIPT = [[
 bin=$1; editor=${2:-${BRACCO_EDITOR:-${VISUAL:-${EDITOR:-vi}}}}; client=$3; shift 3
 f=$("$bin" --absolute "$@") || exit 0
 [ -n "$f" ] || exit 0
-if command -v jq >/dev/null; then
-  win=$(rex window new -c "$PWD" --focus=false --json "$(basename "$f")" -- sh -c 'exec $0 "$1"' "$editor" "$f" | jq -r .window_id) || exit 1
-  # `rex window focus` moves the server's active window only; the app client
-  # needs session.select to switch tabs. With several clients connected the
-  # target is ambiguous, so address the one that ran the action, falling back
-  # to the default when that is not an app client (e.g. `rex do` from a shell).
-  { [ -n "$client" ] && rex -C "$client" do session.select session_id="$REX_SESSION" window_id="$win" 2>/dev/null; } ||
-    rex do session.select session_id="$REX_SESSION" window_id="$win"
-else
-  rex window new -c "$PWD" "$(basename "$f")" -- sh -c 'exec $0 "$1"' "$editor" "$f" >/dev/null || exit 1
-fi
+# Several clients can be connected, so address the one that ran the action.
+if [ -n "$client" ]; then set -- -C "$client"; else set --; fi
+BRACCO_PICK_FILE=$f BRACCO_PICK_EDITOR=$editor BRACCO_PICK_CWD=$PWD rex "$@" do -e '
+  local file = os.getenv("BRACCO_PICK_FILE")
+  local win, err = rex.session.new_window({
+    focus = false,
+    window_label = file:match("[^/]*$"),
+    layout = rex.layout.block({
+      flavor = "com.superlogical.terminal.shell",
+      options = { cwd = os.getenv("BRACCO_PICK_CWD"), command = { "sh", "-c", "exec $0 \"$1\"", os.getenv("BRACCO_PICK_EDITOR"), file } },
+    }),
+  })
+  if err then error(err, 0) end
+  -- A new window does not move the app client; it needs session.select to switch tabs.
+  rex.client.queue("session.select", { session_id = rex.session_id, window_id = win.window_id })
+' || exit 1
 exec rex block close "$REX_BLOCK"
 ]]
+
+--- The id when it belongs to an app client, else "" so the script falls back to the default client (e.g. `rex do` from a shell).
+local function app_client(client_id)
+	local r = client_id and rex.call("client.list")
+	for _, c in ipairs(r and r.clients or {}) do
+		if c.client_id == client_id and c.info and c.info.kind == "app" then
+			return client_id
+		end
+	end
+	return ""
+end
 
 --- Working directory of a block: the reported `file://` URI, else the foreground process cwd, else $HOME.
 local function cwd_of(block_id)
@@ -54,7 +70,7 @@ function M.setup(opts)
 		title = "bracco: open file",
 		run = function(ctx)
 			-- Empty editor: the script falls back to the float's own $BRACCO_EDITOR/$VISUAL/$EDITOR.
-			local cmd = { "sh", "-c", SCRIPT, "bracco", opts.bin or "bracco", opts.editor or "", ctx.client_id or "" }
+			local cmd = { "sh", "-c", SCRIPT, "bracco", opts.bin or "bracco", opts.editor or "", app_client(ctx.client_id) }
 			for _, arg in ipairs(opts.args or {}) do
 				cmd[#cmd + 1] = arg
 			end
