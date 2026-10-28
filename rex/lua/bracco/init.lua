@@ -51,6 +51,7 @@ function M.setup(opts)
 		name = "bracco_pick",
 		title = "bracco: open file",
 		run = function(ctx)
+			rex.log("info", ("bracco_pick origin=%s client_id=%s"):format(tostring(ctx.origin), tostring(ctx.client_id)))
 			-- Empty editor: the script falls back to the float's own $BRACCO_EDITOR/$VISUAL/$EDITOR.
 			local cmd = { "sh", "-c", SCRIPT, "bracco", opts.bin or "bracco", opts.editor or "", ctx.client_id or "" }
 			for _, arg in ipairs(opts.args or {}) do
