@@ -15,8 +15,10 @@ if command -v jq >/dev/null; then
   win=$(rex window new -c "$PWD" --focus=false --json "$(basename "$f")" -- sh -c 'exec $0 "$1"' "$editor" "$f" | jq -r .window_id) || exit 1
   # `rex window focus` moves the server's active window only; the app client
   # needs session.select to switch tabs. With several clients connected the
-  # target is ambiguous, so address the one that ran the action.
-  rex ${client:+-C "$client"} do session.select session_id="$REX_SESSION" window_id="$win"
+  # target is ambiguous, so address the one that ran the action, falling back
+  # to the default when that is not an app client (e.g. `rex do` from a shell).
+  { [ -n "$client" ] && rex -C "$client" do session.select session_id="$REX_SESSION" window_id="$win" 2>/dev/null; } ||
+    rex do session.select session_id="$REX_SESSION" window_id="$win"
 else
   rex window new -c "$PWD" "$(basename "$f")" -- sh -c 'exec $0 "$1"' "$editor" "$f" >/dev/null || exit 1
 fi
@@ -51,7 +53,6 @@ function M.setup(opts)
 		name = "bracco_pick",
 		title = "bracco: open file",
 		run = function(ctx)
-			rex.log("info", ("bracco_pick origin=%s client_id=%s"):format(tostring(ctx.origin), tostring(ctx.client_id)))
 			-- Empty editor: the script falls back to the float's own $BRACCO_EDITOR/$VISUAL/$EDITOR.
 			local cmd = { "sh", "-c", SCRIPT, "bracco", opts.bin or "bracco", opts.editor or "", ctx.client_id or "" }
 			for _, arg in ipairs(opts.args or {}) do
