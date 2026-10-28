@@ -5,17 +5,18 @@ local M = {}
 local TERM = "com.superlogical.terminal"
 local SHELL = TERM .. ".shell"
 
--- Runs inside the float. $1 bracco, $2 editor (may be empty), rest are bracco args.
+-- Runs inside the float. $1 bracco, $2 editor (may be empty), $3 client id (may be empty), rest are bracco args.
 -- UI is drawn on /dev/tty, so the pick comes back on stdout.
 local SCRIPT = [[
-bin=$1; editor=${2:-${BRACCO_EDITOR:-${VISUAL:-${EDITOR:-vi}}}}; shift 2
+bin=$1; editor=${2:-${BRACCO_EDITOR:-${VISUAL:-${EDITOR:-vi}}}}; client=$3; shift 3
 f=$("$bin" --absolute "$@") || exit 0
 [ -n "$f" ] || exit 0
 if command -v jq >/dev/null; then
   win=$(rex window new -c "$PWD" --focus=false --json "$(basename "$f")" -- sh -c 'exec $0 "$1"' "$editor" "$f" | jq -r .window_id) || exit 1
   # `rex window focus` moves the server's active window only; the app client
-  # needs session.select to switch tabs.
-  rex do session.select session_id="$REX_SESSION" window_id="$win"
+  # needs session.select to switch tabs. With several clients connected the
+  # target is ambiguous, so address the one that ran the action.
+  rex ${client:+-C "$client"} do session.select session_id="$REX_SESSION" window_id="$win"
 else
   rex window new -c "$PWD" "$(basename "$f")" -- sh -c 'exec $0 "$1"' "$editor" "$f" >/dev/null || exit 1
 fi
@@ -51,7 +52,7 @@ function M.setup(opts)
 		title = "bracco: open file",
 		run = function(ctx)
 			-- Empty editor: the script falls back to the float's own $BRACCO_EDITOR/$VISUAL/$EDITOR.
-			local cmd = { "sh", "-c", SCRIPT, "bracco", opts.bin or "bracco", opts.editor or "" }
+			local cmd = { "sh", "-c", SCRIPT, "bracco", opts.bin or "bracco", opts.editor or "", ctx.client_id or "" }
 			for _, arg in ipairs(opts.args or {}) do
 				cmd[#cmd + 1] = arg
 			end
